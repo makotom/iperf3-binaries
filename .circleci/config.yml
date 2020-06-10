@@ -1,0 +1,186 @@
+version: 2.1
+
+orbs:
+  github-release: haskell-works/github-release@1.3.3
+
+parameters:
+  src-repo-url:
+    type: string
+    default: https://github.com/esnet/iperf.git
+  branch-name:
+    type: string
+    default: "3.7"
+  common-build-params:
+    type: string
+    default: "--disable-shared --disable-static --disable-profiling"
+
+jobs:
+  build-windows:
+    machine:
+      image: windows-server-2019-vs2019:stable
+      shell: powershell.exe
+    resource_class: windows.medium
+    steps:
+      - run:
+          name: Download Cygwin installer
+          shell: bash.exe
+          command: |
+            curl -sSJOL https://cygwin.com/setup-x86_64.exe
+      - run:
+          name: Install Cygwin and required packages
+          command: .\setup-x86_64.exe -q -s https://mirrors.kernel.org/sourceware/cygwin/ -P libssl-devel,git,gcc-core,make
+      - run:
+          name: Build iperf3 with Cygwin
+          shell: C:\\cygwin64\\bin\\bash.exe --login -eo pipefail
+          command: |
+            CIRCLE_WORKING_DIRECTORY=$(eval "echo $CIRCLE_WORKING_DIRECTORY")
+
+            cd $CIRCLE_WORKING_DIRECTORY
+            git clone << pipeline.parameters.src-repo-url >> -b << pipeline.parameters.branch-name >>
+
+            cd iperf
+
+            ./configure --prefix=$CIRCLE_WORKING_DIRECTORY/iperf3-cygwin64 CFLAGS=-DNOCRYPT << pipeline.parameters.common-build-params >>
+            make
+
+            mkdir -p $CIRCLE_WORKING_DIRECTORY/iperf3-cygwin64
+            make install
+            cp /usr/bin/cygwin1.dll /usr/bin/cygcrypto-1.1.dll /usr/bin/cygz.dll -t $CIRCLE_WORKING_DIRECTORY/iperf3-cygwin64/bin
+      - run:
+          name: Create a Zip file
+          command: |
+            $ProgressPreference = "SilentlyContinue"
+            Compress-Archive .\iperf3-cygwin64 .\iperf3-cygwin64.zip
+      - persist_to_workspace:
+          root: .
+          paths:
+            - iperf3-cygwin64.zip
+      - store_artifacts:
+          path: iperf3-cygwin64.zip
+
+  build-macos:
+    macos:
+      xcode: 11.5.0
+    steps:
+      - run:
+          name: Clone iperf3
+          command: git clone << pipeline.parameters.src-repo-url >> -b << pipeline.parameters.branch-name >>
+      - run:
+          name: Build iperf3
+          working_directory: iperf
+          command: |
+            CIRCLE_WORKING_DIRECTORY=$(eval "echo $CIRCLE_WORKING_DIRECTORY")
+
+            ./configure --prefix=$CIRCLE_WORKING_DIRECTORY/iperf3-macos --with-openssl=$(brew --prefix openssl) << pipeline.parameters.common-build-params >>
+            make
+
+            mkdir -p $CIRCLE_WORKING_DIRECTORY/iperf3-macos
+            make install
+
+            # Postruns
+            cd $CIRCLE_WORKING_DIRECTORY/iperf3-macos/bin
+            # Copy linked OpenSSL libraris to the current directory
+            # and tell the linker to refer to them
+            otool -L iperf3 | grep openssl | awk '{ print $1 }' | while read dylib
+            do
+              name=$(basename $dylib)
+              cp $dylib ./
+              chmod u+w $name
+              install_name_tool -change $dylib @executable_path/$name iperf3
+            done
+            # Modify libssl as well
+            otool -L libssl.1.1.dylib | grep openssl | awk '{ print $1 }' | while read dylib
+            do
+              install_name_tool -change $dylib @executable_path/$(basename $dylib) libssl.1.1.dylib
+            done
+      - run:
+          name: Create a Zip file
+          command: zip -r iperf3-macos.zip iperf3-macos
+      - persist_to_workspace:
+          root: .
+          paths:
+            - iperf3-macos.zip
+      - store_artifacts:
+          path: iperf3-macos.zip
+
+  test-windows:
+    machine:
+      image: windows-server-2019-vs2019:stable
+      shell: powershell.exe
+    resource_class: windows.medium
+    steps:
+      - attach_workspace:
+          at: .
+      - run:
+          name: Extract iperf3-cygwin64.zip
+          command: |
+            $ProgressPreference = "SilentlyContinue"
+            Expand-Archive .\iperf3-cygwin64.zip .
+      - run:
+          name: Test executable
+          command: .\iperf3-cygwin64\bin\iperf3.exe -v
+      - run:
+          name: Run as a server
+          command: .\iperf3-cygwin64\bin\iperf3.exe -s
+          background: true
+      - run:
+          name: Run as a client
+          command: .\iperf3-cygwin64\bin\iperf3.exe -c localhost -R
+
+  test-macos:
+    macos:
+      xcode: 11.5.0
+    steps:
+      - attach_workspace:
+          at: .
+      - run:
+          name: Uninstall pre-installed OpenSSL
+          command: brew uninstall --ignore-dependencies openssl
+      - run:
+          name: Extract iperf3-macos.zip
+          command: unzip iperf3-macos.zip
+      - run:
+          name: Test executable
+          command: iperf3-macos/bin/iperf3 -v
+      - run:
+          name: Run as a server
+          command: iperf3-macos/bin/iperf3 -s
+          background: true
+      - run:
+          name: Run as a client
+          command: iperf3-macos/bin/iperf3 -c localhost -R
+
+  release:
+    executor: github-release/default
+    steps:
+      - attach_workspace:
+          at: .
+      - run:
+          name: Compute version number
+          command: |
+            echo "export IPERF3_BUILD_VERSION=\"<< pipeline.parameters.branch-name>>.${CIRCLE_BUILD_NUM}-${CIRCLE_SHA1:0:7}\"" | tee -a $BASH_ENV
+      - github-release/release:
+          tag: v$IPERF3_BUILD_VERSION
+          title: $IPERF3_BUILD_VERSION
+          artefacts-folder: .
+
+workflows:
+  version: 2
+  build-test-release:
+    jobs:
+      - build-windows
+      - build-macos
+      - test-windows:
+          requires:
+            - build-windows
+      - test-macos:
+          requires:
+            - build-macos
+      - release:
+          requires:
+            - test-windows
+            - test-macos
+          context: github
+          filters:
+            branches:
+              only: master
