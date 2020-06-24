@@ -15,11 +15,51 @@ parameters:
     default: "--disable-shared --disable-static --disable-profiling"
 
 jobs:
+  build-linux:
+    docker:
+      - image: archlinux/base
+    parameters:
+      label:
+        type: string
+        default: iperf3-linux
+    steps:
+      - run:
+          name: Install dependencies
+          command: pacman -Syu --noconfirm openssl git gcc make awk tar
+      - run:
+          name: Clone iperf3
+          command: git clone << pipeline.parameters.src-repo-url >> -b << pipeline.parameters.branch-name >>
+      - run:
+          name: Build iperf3
+          working_directory: iperf
+          command: |
+            CIRCLE_WORKING_DIRECTORY=$(eval "echo $CIRCLE_WORKING_DIRECTORY")
+            IPERF3_MAKE_PREFIX=$CIRCLE_WORKING_DIRECTORY/<< parameters.label >>
+
+            ./configure --prefix=$IPERF3_MAKE_PREFIX << pipeline.parameters.common-build-params >>
+            make
+
+            mkdir -p $IPERF3_MAKE_PREFIX
+            make install
+      - run:
+          name: Create a tarball
+          command: tar -cJf << parameters.label >>.tar.xz << parameters.label >>
+      - persist_to_workspace:
+          root: .
+          paths:
+            - << parameters.label >>.tar.xz
+      - store_artifacts:
+          path: << parameters.label >>.tar.xz
+
   build-windows:
     machine:
       image: windows-server-2019-vs2019:stable
       shell: powershell.exe
     resource_class: windows.medium
+    parameters:
+      label:
+        type: string
+        default: iperf3-cygwin64
     steps:
       - run:
           name: Download Cygwin installer
@@ -34,33 +74,38 @@ jobs:
           shell: C:\\cygwin64\\bin\\bash.exe --login -eo pipefail
           command: |
             CIRCLE_WORKING_DIRECTORY=$(eval "echo $CIRCLE_WORKING_DIRECTORY")
+            IPERF3_MAKE_PREFIX=$CIRCLE_WORKING_DIRECTORY/<< parameters.label >>
 
             cd $CIRCLE_WORKING_DIRECTORY
             git clone << pipeline.parameters.src-repo-url >> -b << pipeline.parameters.branch-name >>
 
             cd iperf
 
-            ./configure --prefix=$CIRCLE_WORKING_DIRECTORY/iperf3-cygwin64 CFLAGS=-DNOCRYPT << pipeline.parameters.common-build-params >>
+            ./configure --prefix=$IPERF3_MAKE_PREFIX CFLAGS=-DNOCRYPT << pipeline.parameters.common-build-params >>
             make
 
-            mkdir -p $CIRCLE_WORKING_DIRECTORY/iperf3-cygwin64
+            mkdir -p $IPERF3_MAKE_PREFIX
             make install
-            cp /usr/bin/cygwin1.dll /usr/bin/cygcrypto-1.1.dll /usr/bin/cygz.dll -t $CIRCLE_WORKING_DIRECTORY/iperf3-cygwin64/bin
+            cp /usr/bin/cygwin1.dll /usr/bin/cygcrypto-1.1.dll /usr/bin/cygz.dll -t $IPERF3_MAKE_PREFIX/bin
       - run:
           name: Create a Zip file
           command: |
             $ProgressPreference = "SilentlyContinue"
-            Compress-Archive .\iperf3-cygwin64 .\iperf3-cygwin64.zip
+            Compress-Archive .\\<< parameters.label >> .\\<< parameters.label >>.zip
       - persist_to_workspace:
           root: .
           paths:
-            - iperf3-cygwin64.zip
+            - << parameters.label >>.zip
       - store_artifacts:
-          path: iperf3-cygwin64.zip
+          path: << parameters.label >>.zip
 
   build-macos:
     macos:
       xcode: 11.5.0
+    parameters:
+      label:
+        type: string
+        default: iperf3-macos
     steps:
       - run:
           name: Clone iperf3
@@ -70,15 +115,16 @@ jobs:
           working_directory: iperf
           command: |
             CIRCLE_WORKING_DIRECTORY=$(eval "echo $CIRCLE_WORKING_DIRECTORY")
+            IPERF3_MAKE_PREFIX=$CIRCLE_WORKING_DIRECTORY/<< parameters.label >>
 
-            ./configure --prefix=$CIRCLE_WORKING_DIRECTORY/iperf3-macos --with-openssl=$(brew --prefix openssl) << pipeline.parameters.common-build-params >>
+            ./configure --prefix=$IPERF3_MAKE_PREFIX --with-openssl=$(brew --prefix openssl) << pipeline.parameters.common-build-params >>
             make
 
-            mkdir -p $CIRCLE_WORKING_DIRECTORY/iperf3-macos
+            mkdir -p $IPERF3_MAKE_PREFIX
             make install
 
             # Postruns
-            cd $CIRCLE_WORKING_DIRECTORY/iperf3-macos/bin
+            cd $IPERF3_MAKE_PREFIX/bin
             # Copy linked OpenSSL libraris to the current directory
             # and tell the linker to refer to them
             otool -L iperf3 | grep openssl | awk '{ print $1 }' | while read dylib
@@ -95,19 +141,47 @@ jobs:
             done
       - run:
           name: Create a Zip file
-          command: zip -r iperf3-macos.zip iperf3-macos
+          command: zip -r << parameters.label >>.zip << parameters.label >>
       - persist_to_workspace:
           root: .
           paths:
-            - iperf3-macos.zip
+            - << parameters.label >>.zip
       - store_artifacts:
-          path: iperf3-macos.zip
+          path: << parameters.label >>.zip
+
+  test-linux:
+    docker:
+      - image: cimg/base:stable
+    parameters:
+      label:
+        type: string
+        default: iperf3-linux
+    steps:
+      - attach_workspace:
+          at: ./
+      - run:
+          name: Extract << parameters.label >>.tar.xz
+          command: tar -xf << parameters.label >>.tar.xz
+      - run:
+          name: Test executable
+          command: << parameters.label >>/bin/iperf3 -v
+      - run:
+          name: Run as a server
+          command: << parameters.label >>/bin/iperf3 -s
+          background: true
+      - run:
+          name: Run as a client
+          command: << parameters.label >>/bin/iperf3 -c localhost -R
 
   test-windows:
     machine:
       image: windows-server-2019-vs2019:stable
       shell: powershell.exe
     resource_class: windows.medium
+    parameters:
+      label:
+        type: string
+        default: iperf3-cygwin64
     steps:
       - attach_workspace:
           at: .
@@ -115,21 +189,25 @@ jobs:
           name: Extract iperf3-cygwin64.zip
           command: |
             $ProgressPreference = "SilentlyContinue"
-            Expand-Archive .\iperf3-cygwin64.zip .
+            Expand-Archive .\\<< parameters.label >>.zip .
       - run:
           name: Test executable
-          command: .\iperf3-cygwin64\bin\iperf3.exe -v
+          command: .\\<< parameters.label >>\\bin\\iperf3.exe -v
       - run:
           name: Run as a server
-          command: .\iperf3-cygwin64\bin\iperf3.exe -s
+          command: .\\<< parameters.label >>\\bin\\iperf3.exe -s
           background: true
       - run:
           name: Run as a client
-          command: .\iperf3-cygwin64\bin\iperf3.exe -c localhost -R
+          command: .\\<< parameters.label >>\\bin\\iperf3.exe -c localhost -R
 
   test-macos:
     macos:
       xcode: 11.5.0
+    parameters:
+      label:
+        type: string
+        default: iperf3-macos
     steps:
       - attach_workspace:
           at: .
@@ -137,18 +215,18 @@ jobs:
           name: Uninstall pre-installed OpenSSL
           command: brew uninstall --ignore-dependencies openssl
       - run:
-          name: Extract iperf3-macos.zip
-          command: unzip iperf3-macos.zip
+          name: Extract << parameters.label >>
+          command: unzip << parameters.label >>
       - run:
           name: Test executable
-          command: iperf3-macos/bin/iperf3 -v
+          command: << parameters.label >>/bin/iperf3 -v
       - run:
           name: Run as a server
-          command: iperf3-macos/bin/iperf3 -s
+          command: << parameters.label >>/bin/iperf3 -s
           background: true
       - run:
           name: Run as a client
-          command: iperf3-macos/bin/iperf3 -c localhost -R
+          command: << parameters.label >>/bin/iperf3 -c localhost -R
 
   release:
     executor: github-release/default
@@ -168,8 +246,12 @@ workflows:
   version: 2
   build-test-release:
     jobs:
+      - build-linux
       - build-windows
       - build-macos
+      - test-linux:
+          requires:
+            - build-linux
       - test-windows:
           requires:
             - build-windows
@@ -178,6 +260,7 @@ workflows:
             - build-macos
       - release:
           requires:
+            - test-linux
             - test-windows
             - test-macos
           context: github
