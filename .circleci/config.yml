@@ -12,7 +12,7 @@ parameters:
     default: "3.8.1"
   common-build-params:
     type: string
-    default: "--disable-shared --disable-static --disable-profiling"
+    default: "--disable-shared --disable-static"
 
 jobs:
   build-linux:
