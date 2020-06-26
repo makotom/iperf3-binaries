@@ -192,14 +192,14 @@ jobs:
             Expand-Archive .\\<< parameters.label >>.zip .
       - run:
           name: Test executable
-          command: .\\<< parameters.label >>\\bin\\iperf3.exe -v
+          command: .\\<< parameters.label >>\bin\iperf3.exe -v
       - run:
           name: Run as a server
-          command: .\\<< parameters.label >>\\bin\\iperf3.exe -s
+          command: .\\<< parameters.label >>\bin\iperf3.exe -s
           background: true
       - run:
           name: Run as a client
-          command: .\\<< parameters.label >>\\bin\\iperf3.exe -c localhost -R
+          command: .\\<< parameters.label >>\bin\iperf3.exe -c localhost -R
 
   test-macos:
     macos:
