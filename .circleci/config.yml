@@ -81,7 +81,7 @@ jobs:
 
             cd iperf
 
-            ./configure --prefix=$IPERF3_MAKE_PREFIX CFLAGS=-DNOCRYPT << pipeline.parameters.common-build-params >>
+            ./configure --prefix=$IPERF3_MAKE_PREFIX << pipeline.parameters.common-build-params >>
             make
 
             mkdir -p $IPERF3_MAKE_PREFIX
