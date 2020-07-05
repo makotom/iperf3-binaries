@@ -4,7 +4,7 @@ CircleCI `config.yml` to build executable binaries of `iperf3` for Linux, Window
 
 # Quick start
 
-Pre-build binaries are available as [releases](https://github.com/makotom/iperf3-binaries/releases).
+Pre-built binaries are available as [releases](https://github.com/makotom/iperf3-binaries/releases).
 
 # Hands-on
 
