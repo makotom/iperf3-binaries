@@ -66,7 +66,7 @@ jobs:
             fi
             echo
 
-            if [ "<< pipeline.parameters.force-build >>" != "" ] || ! (git tag | grep v${TARGET_REV})
+            if [ "<< pipeline.parameters.force-build >>" != "" ] || ! (git tag | grep "^${TARGET_REV}-")
             then
               echo Calling CircleCI API to build revision ${TARGET_REV}...
 
@@ -321,18 +321,25 @@ jobs:
           command: << parameters.label >>/bin/iperf3 -c localhost -R
 
   release:
-    executor: github-release/default
+    docker:
+      - image: debian:buster-slim
     steps:
+      - run:
+          name: Install dependencies
+          command: |
+            apt update 
+            apt install -y curl git
+
+            tmpPath=$(mktemp)
+            curl -sSJL https://api.github.com/repos/cli/cli/releases/latest | grep -o 'https://github.com/cli/cli/releases/download/[^/]\{1,\}/gh_[^/]\{1,\}_linux_amd64.deb' | xargs curl -o $tmpPath -JL
+            dpkg -i $tmpPath
       - attach_workspace:
           at: .
       - run:
-          name: Compute version number
+          name: Create a release
           command: |
-            echo "export IPERF3_BUILD_VERSION=\"<< pipeline.parameters.target-rev>>-${CIRCLE_BUILD_NUM}-${CIRCLE_SHA1:0:7}\"" | tee -a $BASH_ENV
-      - github-release/release:
-          tag: $IPERF3_BUILD_VERSION
-          title: $IPERF3_BUILD_VERSION
-          artefacts-folder: .
+            IPERF3_BUILD_VERSION="<< pipeline.parameters.target-rev>>-${CIRCLE_BUILD_NUM}-${CIRCLE_SHA1:0:7}"
+            gh release create -R ${CIRCLE_PROJECT_USERNAME}/${CIRCLE_PROJECT_REPONAME} -t "${IPERF3_BUILD_VERSION}" -n "" "${IPERF3_BUILD_VERSION}" *
 
 workflows:
   setup-on-demand:
@@ -347,7 +354,7 @@ workflows:
           filters:
             branches:
               only:
-                - << pipeline.parameters.release-on >>
+                - master
 
   build-test-release:
     when:
