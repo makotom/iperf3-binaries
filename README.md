@@ -12,16 +12,29 @@ Pre-built binaries are available [here](https://github.com/makotom/iperf3-binari
 
 2. Set up a [CircleCI](https://circleci.com/) project for your own copy.
 
-   Note 1: You need a paid CircleCI subscription as macOS is not available for the free plan. See also: https://circleci.com/pricing/#comparison-table
+   Notes:
 
-   Note 2: `circleci` context with `CIRCLE_TOKEN` envar is required by `setup` job. See https://circleci.com/docs/2.0/contexts/#creating-and-using-a-context for creation of context. See https://help.github.com/en/github/authenticating-to-github/creating-a-personal-access-token-for-the-command-line#creating-a-token for creation of GitHub personal access token.
+   1. You need a paid CircleCI subscription as macOS is not available for its free plan.
+   2. `circleci` context with `CIRCLE_TOKEN` envar, which is a personal API token for CircleCI, is required by `setup` job.
+   3. `github` context with `GITHUB_TOKEN` envar, which is a personal access token for GitHub, is required by `release` job.
 
-   Note 3: `github` context with `GITHUB_TOKEN` envar is required by `release` job. See https://circleci.com/docs/2.0/contexts/#creating-and-using-a-context for creation of context. See https://help.github.com/en/github/authenticating-to-github/creating-a-personal-access-token-for-the-command-line#creating-a-token for creation of GitHub personal access token.
+   See these resources for details:
 
-3. Build starts on CircleCI. Once it completes, deliverables will become available on GitHub Releases of your own repo and [artifacts on CircleCI](https://circleci.com/docs/2.0/artifacts/).
+   - [CircleCI pricing](https://circleci.com/pricing/#comparison-table)
+   - [Creation of contexts on CircleCI](https://circleci.com/docs/2.0/contexts/#creating-and-using-a-context)
+   - [Creation of personal API tokens for CircleCI](https://circleci.com/docs/2.0/managing-api-tokens/#creating-a-personal-api-token)
+   - [Creation of personal access tokens for GitHub](https://help.github.com/en/github/authenticating-to-github/creating-a-personal-access-token-for-the-command-line#creating-a-token)
+
+3. Build starts on CircleCI. Once it completes, deliverables will become available on GitHub Releases of your own repo, and [artifacts on CircleCI](https://circleci.com/docs/2.0/artifacts/).
 
 ## Pipeline parameters
 
-There is a pipeline parameter `force-build` configured to manipulate the behaviour of the pipeline.
-The parameter accepts any valid Git revision, such as branch, tag, or commit hash, and its default value is a zero-length string.
-Setting a non-empty string for this parameter will build the source code of the designated revision _forcibly_ - regardless of other conditions.
+The pipeline parameter `force-build` enables you to forcibly build a specific revision of the source code.
+The parameter accepts any valid Git revision, such as a branch name, tag name, or commit hash, and it is set to a zero-length string by default (causing the pipeline to build the latest tagged version if and only if it is never built).
+
+This enables you to create an ad-hoc release by passing the accordingly-configured parameter, using [the API to trigger a new pipeline](https://circleci.com/docs/api/v2/#operation/triggerPipeline).
+
+# Resources
+
+- [Homepage of iperf3](https://software.es.net/iperf/)
+- [iperf3 on GitHub](https://github.com/esnet/iperf)
