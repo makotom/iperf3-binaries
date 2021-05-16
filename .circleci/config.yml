@@ -65,7 +65,7 @@ jobs:
             fi
             echo
 
-            if [ "<< pipeline.parameters.force-build >>" != "" ] || ! (git tag | grep "^${TARGET_REV}-")
+            if [ "<< pipeline.parameters.force-build >>" != "" ] || ! (git tag | grep -P "^${TARGET_REV}-\d+-${CIRCLE_SHA1:0:7}")
             then
               echo Calling CircleCI API to build revision ${TARGET_REV}...
 
