@@ -4,7 +4,6 @@ version: 2.1
 
 orbs:
   continuation: circleci/continuation@0.1.2
-  github-release: haskell-works/github-release@1.3.3
 
 parameters:
   force-build:
