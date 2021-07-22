@@ -364,7 +364,7 @@ jobs:
           command: |
             TARGET_COMMIT_HASH="<< pipeline.parameters.target-commit-hash >>"
             IPERF3_BUILD_VERSION="<< pipeline.parameters.target-rev >>-${TARGET_COMMIT_HASH:0:7}-${CIRCLE_BUILD_NUM}-${CIRCLE_SHA1:0:7}"
-            gh release create -R ${CIRCLE_PROJECT_USERNAME}/${CIRCLE_PROJECT_REPONAME} -t "${IPERF3_BUILD_VERSION}" -n "Source: https://github.com/esnet/iperf/tree/<< pipeline.parameters.target-rev >>" "${IPERF3_BUILD_VERSION}" *
+            gh release create -R ${CIRCLE_PROJECT_USERNAME}/${CIRCLE_PROJECT_REPONAME} -t "${IPERF3_BUILD_VERSION}" -n "Source: https://github.com/esnet/iperf/tree/<< pipeline.parameters.target-commit-hash >>" "${IPERF3_BUILD_VERSION}" *
 
 workflows:
   setup-on-demand:
