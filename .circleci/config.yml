@@ -31,7 +31,7 @@ parameters:
     default: 12.4.0
   release-on:
     type: string
-    default: master
+    default: main
 
 library:
   setup-workflow: &setup-workflow
@@ -379,7 +379,7 @@ workflows:
           filters:
             branches:
               only:
-                - master
+                - main
 
   build-test-release:
     when:
