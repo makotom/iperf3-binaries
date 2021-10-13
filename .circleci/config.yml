@@ -1,6 +1,6 @@
 version: 2.1
 
-# setup: << pipeline.parameters.is-setup >>
+setup: << pipeline.parameters.is-setup >>
 
 parameters:
   force-build:
@@ -23,36 +23,53 @@ parameters:
   target-commit-hash:
     type: string
     default: ""
-  common-build-params:
-    type: string
-    default: "--disable-shared --disable-static"
-  xcode-version:
-    type: string
-    default: 12.4.0
   release-on:
     type: string
     default: main
 
-library:
-  setup-workflow: &setup-workflow
-    jobs:
-      - setup:
-          context:
-            - circleci
+  common-build-params:
+    type: string
+    default: "--disable-shared --disable-static"
+  label-linux:
+    type: string
+    default: iperf3-linux
+  label-windows:
+    type: string
+    default: iperf3-windows
+  label-macos:
+    type: string
+    default: iperf3-macos
+
+executors:
+  debian:
+    docker:
+      - image: debian:bullseye-slim
+  archlinux:
+    docker:
+      - image: archlinux
+  windows:
+    machine:
+      image: windows-server-2019-vs2019:stable
+    shell: powershell.exe
+    resource_class: windows.medium
+  macos:
+    macos:
+      xcode: 13.0.0
 
 jobs:
   setup:
-    docker:
-      - image: cimg/base:stable
+    executor: debian
     parameters:
       continue-config:
         type: string
         default: .circleci/config.yml
-      parameters-json:
-        type: string
-        default: .circleci/parameters.json
     steps:
       - checkout
+      - run:
+          name: Install dependencies
+          command: |
+            apt update
+            apt -y install git jq curl
       - run:
           name: Determine whether we should build the source
           command: |
@@ -77,28 +94,34 @@ jobs:
             then
               echo Calling CircleCI API to build revision ${TARGET_REV} at ${TARGET_COMMIT_HASH}...
 
-              RELEASE_ON=$([ "${CIRCLE_BRANCH}" == "<< pipeline.parameters.release-on >>" ] && echo ${CIRCLE_SHA1} || echo "<< pipeline.parameters.release-on >>")
-              echo '{"is-setup":false,"target-rev":"'"${TARGET_REV}"'","target-commit-hash":"'"${TARGET_COMMIT_HASH}"'","release-on":"'"${RELEASE_ON}"'"}' | tee -a << parameters.parameters-json >>
-              # TODO: Rewrite with continuation API
               curl \
                 --fail \
                 -X POST \
                 -H "Content-Type: application/json" \
-                -H "Circle-Token: $CIRCLE_TOKEN" \
-                --data-binary '{"branch":"'"${CIRCLE_SHA1}"'","parameters":'$(cat << parameters.parameters-json >>)'}' \
-                https://circleci.com/api/v2/project/$(echo $CIRCLE_BUILD_URL | awk -F/ '{ print $4 "/" $5 "/" $6 }')/pipeline
+                --data-binary "$(
+                  jq -n \
+                    --arg continuation "$CIRCLE_CONTINUATION_KEY" \
+                    --arg config "$(cat << parameters.continue-config >>)" \
+                    --arg target_rev "${TARGET_REV}" \
+                    --arg target_commit_hash "${TARGET_COMMIT_HASH}" \
+                    '{
+                      "continuation-key": $continuation,
+                      "configuration": $config,
+                      "parameters": {
+                        "is-setup": false,
+                        "target-rev": $target_rev,
+                        "target-commit-hash": $target_commit_hash
+                      }
+                    }'
+                  )" \
+                  https://circleci.com/api/v2/pipeline/continue
             else
               echo 'We have already built this target with the tag(s) above. Halting the pipeline.'
               circleci-agent step halt
             fi
 
   build-linux:
-    docker:
-      - image: debian:buster-slim
-    parameters:
-      label:
-        type: string
-        default: iperf3-linux
+    executor: debian
     steps:
       - run:
           name: Install dependencies
@@ -119,7 +142,7 @@ jobs:
           name: Build iperf3
           working_directory: iperf
           command: |
-            IPERF3_MAKE_PREFIX=$(eval echo $CIRCLE_WORKING_DIRECTORY)/<< parameters.label >>
+            IPERF3_MAKE_PREFIX=$(eval echo $CIRCLE_WORKING_DIRECTORY)/<< pipeline.parameters.label-linux >>
             mkdir -p $IPERF3_MAKE_PREFIX
 
             ./configure --prefix=$IPERF3_MAKE_PREFIX << pipeline.parameters.common-build-params >>
@@ -130,23 +153,16 @@ jobs:
             cp LICENSE $IPERF3_MAKE_PREFIX/share/doc/iperf3
       - run:
           name: Create a tarball
-          command: tar -cJf << parameters.label >>.tar.xz << parameters.label >>
+          command: tar -cJf << pipeline.parameters.label-linux >>.tar.xz << pipeline.parameters.label-linux >>
       - persist_to_workspace:
           root: .
           paths:
-            - << parameters.label >>.tar.xz
+            - << pipeline.parameters.label-linux >>.tar.xz
       - store_artifacts:
-          path: << parameters.label >>.tar.xz
+          path: << pipeline.parameters.label-linux >>.tar.xz
 
   build-windows:
-    machine:
-      image: windows-server-2019-vs2019:stable
-    shell: powershell.exe
-    resource_class: windows.medium
-    parameters:
-      label:
-        type: string
-        default: iperf3-cygwin64
+    executor: windows
     steps:
       - run:
           name: Download Cygwin installer
@@ -175,7 +191,7 @@ jobs:
           command: |
             NATIVE_WORK_DIR=$OLDPWD
 
-            IPERF3_MAKE_PREFIX=$(eval echo $CIRCLE_WORKING_DIRECTORY)/<< parameters.label >>
+            IPERF3_MAKE_PREFIX=$(eval echo $CIRCLE_WORKING_DIRECTORY)/<< pipeline.parameters.label-windows >>
             mkdir -p $IPERF3_MAKE_PREFIX
 
             eval cd $CIRCLE_WORKING_DIRECTORY/iperf
@@ -198,21 +214,16 @@ jobs:
           name: Create a Zip file
           command: |
             $ProgressPreference = "SilentlyContinue"
-            Compress-Archive .\\<< parameters.label >> .\\<< parameters.label >>.zip
+            Compress-Archive .\\<< pipeline.parameters.label-windows >> .\\<< pipeline.parameters.label-windows >>.zip
       - persist_to_workspace:
           root: .
           paths:
-            - << parameters.label >>.zip
+            - << pipeline.parameters.label-windows >>.zip
       - store_artifacts:
-          path: << parameters.label >>.zip
+          path: << pipeline.parameters.label-windows >>.zip
 
   build-macos:
-    macos:
-      xcode: << pipeline.parameters.xcode-version >>
-    parameters:
-      label:
-        type: string
-        default: iperf3-macos
+    executor: macos
     steps:
       - run:
           name: Clone iperf3
@@ -228,7 +239,7 @@ jobs:
           name: Build iperf3
           working_directory: iperf
           command: |
-            IPERF3_MAKE_PREFIX=$(eval echo $CIRCLE_WORKING_DIRECTORY)/<< parameters.label >>
+            IPERF3_MAKE_PREFIX=$(eval echo $CIRCLE_WORKING_DIRECTORY)/<< pipeline.parameters.label-macos >>
             mkdir -p $IPERF3_MAKE_PREFIX
 
             ./configure --prefix=$IPERF3_MAKE_PREFIX --with-openssl=$(brew --prefix openssl) << pipeline.parameters.common-build-params >>
@@ -260,105 +271,47 @@ jobs:
             cp $(brew --prefix openssl)/LICENSE $IPERF3_MAKE_PREFIX/share/doc/openssl
       - run:
           name: Create a Zip file
-          command: zip -r << parameters.label >>.zip << parameters.label >>
+          command: zip -r << pipeline.parameters.label-macos >>.zip << pipeline.parameters.label-macos >>
       - persist_to_workspace:
           root: .
           paths:
-            - << parameters.label >>.zip
+            - << pipeline.parameters.label-macos >>.zip
       - store_artifacts:
-          path: << parameters.label >>.zip
+          path: << pipeline.parameters.label-macos >>.zip
 
-  test-linux:
-    docker:
-      - image: cimg/base:stable
+  test-unified:
     parameters:
-      label:
+      executor:
         type: string
-        default: iperf3-linux
+      dir:
+        type: string
+    executor: << parameters.executor >>
     steps:
-      - attach_workspace:
-          at: ./
-      - run:
-          name: Extract << parameters.label >>.tar.xz
-          command: tar -xf << parameters.label >>.tar.xz
       - run:
           name: Test executable
-          command: << parameters.label >>/bin/iperf3 -v
+          command: << parameters.dir >>/bin/iperf3 -v
       - run:
           name: Run as a server
-          command: << parameters.label >>/bin/iperf3 -s
+          command: << parameters.dir >>/bin/iperf3 -s
           background: true
       - run:
           name: Run as a client
-          command: << parameters.label >>/bin/iperf3 -c localhost -R
-
-  test-windows:
-    machine:
-      image: windows-server-2019-vs2019:stable
-    shell: powershell.exe
-    resource_class: windows.medium
-    parameters:
-      label:
-        type: string
-        default: iperf3-cygwin64
-    steps:
-      - attach_workspace:
-          at: .
-      - run:
-          name: Extract iperf3-cygwin64.zip
-          command: |
-            $ProgressPreference = "SilentlyContinue"
-            Expand-Archive .\\<< parameters.label >>.zip .
-      - run:
-          name: Test executable
-          command: .\\<< parameters.label >>\bin\iperf3.exe -v
-      - run:
-          name: Run as a server
-          command: .\\<< parameters.label >>\bin\iperf3.exe -s
-          background: true
-      - run:
-          name: Run as a client
-          command: .\\<< parameters.label >>\bin\iperf3.exe -c localhost -R
-
-  test-macos:
-    macos:
-      xcode: << pipeline.parameters.xcode-version >>
-    parameters:
-      label:
-        type: string
-        default: iperf3-macos
-    steps:
-      - attach_workspace:
-          at: .
-      - run:
-          name: Uninstall pre-installed OpenSSL
-          command: brew uninstall --ignore-dependencies openssl
-      - run:
-          name: Extract << parameters.label >>
-          command: unzip << parameters.label >>
-      - run:
-          name: Test executable
-          command: << parameters.label >>/bin/iperf3 -v
-      - run:
-          name: Run as a server
-          command: << parameters.label >>/bin/iperf3 -s
-          background: true
-      - run:
-          name: Run as a client
-          command: << parameters.label >>/bin/iperf3 -c localhost -R
+          command: << parameters.dir >>/bin/iperf3 -c localhost -R
 
   release:
-    docker:
-      - image: cimg/base:stable
+    executor: debian
     steps:
       - attach_workspace:
           at: .
       - run:
           name: Install dependencies
           command: |
+            apt update
+            apt -y install curl git
+
             tmpPath=$(mktemp)
             curl -sSJL https://api.github.com/repos/cli/cli/releases/latest | grep -o 'https://github.com/cli/cli/releases/download/[^/]\{1,\}/gh_[^/]\{1,\}_linux_amd64.deb' | xargs curl -o $tmpPath -JL
-            sudo dpkg -i $tmpPath
+            dpkg -i $tmpPath
       - run:
           name: Create a release
           command: |
@@ -367,19 +320,10 @@ jobs:
             gh release create -R ${CIRCLE_PROJECT_USERNAME}/${CIRCLE_PROJECT_REPONAME} -t "${IPERF3_BUILD_VERSION}" -n "Source: https://github.com/esnet/iperf/tree/<< pipeline.parameters.target-commit-hash >>" "${IPERF3_BUILD_VERSION}" *
 
 workflows:
-  setup-on-demand:
-    <<: *setup-workflow
+  setup:
     when: << pipeline.parameters.is-setup >>
-
-  setup-scheduled:
-    <<: *setup-workflow
-    triggers:
-      - schedule:
-          cron: "30 0 * * *"
-          filters:
-            branches:
-              only:
-                - main
+    jobs:
+      - setup
 
   build-test-release:
     when:
@@ -388,15 +332,49 @@ workflows:
       - build-linux
       - build-windows
       - build-macos
-      - test-linux:
+
+      - test-unified:
+          name: test-linux
           requires:
             - build-linux
-      - test-windows:
+          executor: archlinux
+          dir: << pipeline.parameters.label-linux >>
+          pre-steps:
+            - attach_workspace:
+                at: .
+            - run:
+                name: Extract << pipeline.parameters.label-linux >>.tar.xz
+                command: tar -xf << pipeline.parameters.label-linux >>.tar.xz
+      - test-unified:
+          name: test-windows
           requires:
             - build-windows
-      - test-macos:
+          executor: windows
+          dir: << pipeline.parameters.label-windows >>
+          pre-steps:
+            - attach_workspace:
+                at: .
+            - run:
+                name: Extract << pipeline.parameters.label-windows >>.zip
+                command: |
+                  $ProgressPreference = "SilentlyContinue"
+                  Expand-Archive .\\<< pipeline.parameters.label-windows >>.zip .
+      - test-unified:
+          name: test-macos
           requires:
             - build-macos
+          executor: macos
+          dir: << pipeline.parameters.label-macos >>
+          pre-steps:
+            - attach_workspace:
+                at: .
+            - run:
+                name: Uninstall pre-installed OpenSSL
+                command: brew uninstall --ignore-dependencies openssl
+            - run:
+                name: Extract << pipeline.parameters.label-macos >>.zip
+                command: unzip << pipeline.parameters.label-macos >>.zip
+
       - release:
           requires:
             - test-linux
