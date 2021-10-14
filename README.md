@@ -8,24 +8,22 @@ Pre-built binaries are available [here](https://github.com/makotom/iperf3-binari
 
 # Hands-on
 
-1. Fork this repo.
+1.  Fork this repo.
 
-2. Set up a [CircleCI](https://circleci.com/) project for your own copy.
+2.  Set up a [CircleCI](https://circleci.com/) project for your own copy.
 
-   Notes:
+    Notes:
 
-   1. You need a paid CircleCI subscription as macOS is not available for its free plan.
-   2. `circleci` context with `CIRCLE_TOKEN` envar, which is a personal API token for CircleCI, is required by `setup` job.
-   3. `github` context with `GITHUB_TOKEN` envar, which is a personal access token for GitHub, is required by `release` job.
+    1.  You need a paid CircleCI subscription as macOS is not available for its free plan.
+    2.  `github` context with `GITHUB_TOKEN` environment variable, which contains a personal access token for GitHub, is required by `release` job.
 
-   See these resources for details:
+    See these resources for details:
 
-   - [CircleCI pricing](https://circleci.com/pricing/#comparison-table)
-   - [Creation of contexts on CircleCI](https://circleci.com/docs/2.0/contexts/#creating-and-using-a-context)
-   - [Creation of personal API tokens for CircleCI](https://circleci.com/docs/2.0/managing-api-tokens/#creating-a-personal-api-token)
-   - [Creation of personal access tokens for GitHub](https://help.github.com/en/github/authenticating-to-github/creating-a-personal-access-token-for-the-command-line#creating-a-token)
+    - [CircleCI pricing](https://circleci.com/pricing/#comparison-table)
+    - [Creation of contexts on CircleCI](https://circleci.com/docs/2.0/contexts/#creating-and-using-a-context)
+    - [Creation of personal access tokens for GitHub](https://help.github.com/en/github/authenticating-to-github/creating-a-personal-access-token-for-the-command-line#creating-a-token)
 
-3. Build starts on CircleCI. Once it completes, deliverables will become available on GitHub Releases of your own repo, and [artifacts on CircleCI](https://circleci.com/docs/2.0/artifacts/).
+3.  Build starts on CircleCI. Once it completes, deliverables will become available on GitHub Releases of your own repo, and [artifacts on CircleCI](https://circleci.com/docs/2.0/artifacts/).
 
 ## Pipeline parameters
 
