@@ -16,7 +16,7 @@ parameters:
     default: https://github.com/esnet/iperf.git
   src-releases-list-url:
     type: string
-    default: https://github.com/esnet/iperf/releases
+    default: https://github.com/esnet/iperf/tags
   target-rev:
     type: string
     default: ""
@@ -82,11 +82,11 @@ jobs:
               echo Detected the latest release from the origin with revision ${TARGET_REV}.
             fi
 
-            git clone << pipeline.parameters.src-repo >> > /dev/null 2>&1
-            cd iperf
-            git checkout ${TARGET_REV} > /dev/null 2>&1
+            git clone << pipeline.parameters.src-repo >>
+            pushd iperf
+            git checkout ${TARGET_REV}
             TARGET_COMMIT_HASH=$(git rev-parse HEAD)
-            cd ../
+            popd
             echo Corresponding commit hash is ${TARGET_COMMIT_HASH}.
             echo
 
