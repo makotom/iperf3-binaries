@@ -41,9 +41,9 @@ parameters:
     default: iperf3-macos
 
 executors:
-  debian:
+  ubuntu:
     docker:
-      - image: debian:bullseye-slim
+      - image: ubuntu:rolling
   archlinux:
     docker:
       - image: archlinux
@@ -58,7 +58,7 @@ executors:
 
 jobs:
   setup:
-    executor: debian
+    executor: ubuntu
     parameters:
       continue-config:
         type: string
@@ -121,13 +121,11 @@ jobs:
             fi
 
   build-linux:
-    executor: debian
+    executor: archlinux
     steps:
       - run:
           name: Install dependencies
-          command: |
-            apt update
-            apt install -y openssl git gcc make xz-utils
+          command: pacman -Syu --noconfirm git gcc make
       - run:
           name: Clone iperf3
           command: |
@@ -153,13 +151,13 @@ jobs:
             cp LICENSE $IPERF3_MAKE_PREFIX/share/doc/iperf3
       - run:
           name: Create a tarball
-          command: tar -cJf << pipeline.parameters.label-linux >>.tar.xz << pipeline.parameters.label-linux >>
+          command: tar -czf << pipeline.parameters.label-linux >>.tar.gz << pipeline.parameters.label-linux >>
       - persist_to_workspace:
           root: .
           paths:
-            - << pipeline.parameters.label-linux >>.tar.xz
+            - << pipeline.parameters.label-linux >>.tar.gz
       - store_artifacts:
-          path: << pipeline.parameters.label-linux >>.tar.xz
+          path: << pipeline.parameters.label-linux >>.tar.gz
 
   build-windows:
     executor: windows
@@ -299,7 +297,7 @@ jobs:
           command: << parameters.dir >>/bin/iperf3 -c localhost -R
 
   release:
-    executor: debian
+    executor: ubuntu
     steps:
       - attach_workspace:
           at: .
@@ -337,14 +335,14 @@ workflows:
           name: test-linux
           requires:
             - build-linux
-          executor: archlinux
+          executor: ubuntu
           dir: << pipeline.parameters.label-linux >>
           pre-steps:
             - attach_workspace:
                 at: .
             - run:
-                name: Extract << pipeline.parameters.label-linux >>.tar.xz
-                command: tar -xf << pipeline.parameters.label-linux >>.tar.xz
+                name: Extract << pipeline.parameters.label-linux >>.tar.gz
+                command: tar -xf << pipeline.parameters.label-linux >>.tar.gz
       - test-unified:
           name: test-windows
           requires:
