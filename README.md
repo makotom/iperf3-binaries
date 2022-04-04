@@ -14,12 +14,10 @@ Pre-built binaries are available [here](https://github.com/makotom/iperf3-binari
 
     Notes:
 
-    1.  You need a paid CircleCI subscription as macOS is not available for its free plan.
-    2.  `github` context with `GITHUB_TOKEN` environment variable, which contains a personal access token for GitHub, is required by `release` job.
+    - `github` context with `GITHUB_TOKEN` environment variable, which contains a personal access token for GitHub, is required by `release` job.
 
     See these resources for details:
 
-    - [CircleCI pricing](https://circleci.com/pricing/#comparison-table)
     - [Creation of contexts on CircleCI](https://circleci.com/docs/2.0/contexts/#creating-and-using-a-context)
     - [Creation of personal access tokens for GitHub](https://help.github.com/en/github/authenticating-to-github/creating-a-personal-access-token-for-the-command-line#creating-a-token)
 
