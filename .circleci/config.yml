@@ -23,30 +23,22 @@ parameters:
   target-commit-hash:
     type: string
     default: ""
+  build-name:
+    type: string
+    default: ""
   release-on:
     type: string
     default: main
 
-  common-build-params:
-    type: string
-    default: "--disable-shared --disable-static"
-  label-linux:
-    type: string
-    default: iperf3-linux
-  label-windows:
-    type: string
-    default: iperf3-windows
-  label-macos:
-    type: string
-    default: iperf3-macos
-
 executors:
-  ubuntu:
+  ubuntu-docker:
     docker:
       - image: ubuntu:rolling
-  archlinux:
+    resource_class: medium
+  archlinux-docker:
     docker:
       - image: archlinux
+    resource_class: medium
   windows:
     machine:
       image: windows-server-2019-vs2019:stable
@@ -54,11 +46,12 @@ executors:
     resource_class: windows.medium
   macos:
     macos:
-      xcode: 13.0.0
+      xcode: 13.3.0
+    resource_class: macos.x86.medium.gen2
 
 jobs:
   setup:
-    executor: ubuntu
+    executor: ubuntu-docker
     parameters:
       continue-config:
         type: string
@@ -69,30 +62,30 @@ jobs:
           name: Install dependencies
           command: |
             apt update
-            apt -y install git jq curl
+            apt install -y git jq curl
       - run:
           name: Determine whether we should build the source
           command: |
-            if [ "<< pipeline.parameters.force-build >>" != "" ]
-            then
-              TARGET_REV="<< pipeline.parameters.force-build >>"
-              echo Forcibly building revision ${TARGET_REV}!
+            if [[ -n "${FORCE_BUILD}" ]]; then
+              TARGET_REV="${FORCE_BUILD}"
+              echo Forcibly setting TARGET_REV to "${TARGET_REV}"!
             else
-              TARGET_REV=$(curl -sSJL << pipeline.parameters.src-releases-list-url >> | grep -o 'releases/tag/[^"]\{1,\}' | head -n 1 | awk -F/ '{ print $NF }')
-              echo Detected the latest release from the origin with revision ${TARGET_REV}.
+              TARGET_REV="$(curl -sSJL "${SRC_RELEASE_LIST_URL}" | grep -o 'releases/tag/[^"]\{1,\}' | head -n 1 | awk -F/ '{ print $NF }')"
+              echo Detected the latest release from the origin with revision "${TARGET_REV}".
             fi
+            export TARGET_REV
 
-            git clone << pipeline.parameters.src-repo >>
-            pushd iperf
-            git checkout ${TARGET_REV}
+            git clone "${SRC_REPO}" src
+            pushd src
+            git checkout "${TARGET_REV}"
             TARGET_COMMIT_HASH=$(git rev-parse HEAD)
+            export TARGET_COMMIT_HASH
             popd
-            echo Corresponding commit hash is ${TARGET_COMMIT_HASH}.
+            echo Corresponding commit hash is "${TARGET_COMMIT_HASH}".
             echo
 
-            if [ "<< pipeline.parameters.force-build >>" != "" ] || ! (git tag | grep -P "^${TARGET_REV}-${TARGET_COMMIT_HASH:0:7}-\d+-${CIRCLE_SHA1:0:7}")
-            then
-              echo Calling CircleCI API to build revision ${TARGET_REV} at ${TARGET_COMMIT_HASH}...
+            if [[ -n "${FORCE_BUILD}" ]] || ! (git tag | grep -P "^${TARGET_REV}-${TARGET_COMMIT_HASH:0:7}-\d+-${CIRCLE_SHA1:0:7}"); then
+              echo Calling CircleCI API to build revision "${TARGET_REV}" at "${TARGET_COMMIT_HASH}"...
 
               curl \
                 --fail \
@@ -100,28 +93,38 @@ jobs:
                 -H "Content-Type: application/json" \
                 --data-binary "$(
                   jq -n \
-                    --arg continuation "$CIRCLE_CONTINUATION_KEY" \
-                    --arg config "$(cat << parameters.continue-config >>)" \
-                    --arg target_rev "${TARGET_REV}" \
-                    --arg target_commit_hash "${TARGET_COMMIT_HASH}" \
+                    --arg config "$(cat "${CONTINUE_CONFIG}")" \
+                    --arg build_name "${TARGET_REV}-${TARGET_COMMIT_HASH:0:7}-${CIRCLE_BUILD_NUM}-${CIRCLE_SHA1:0:7}" \
                     '{
-                      "continuation-key": $continuation,
+                      "continuation-key": $ENV.CIRCLE_CONTINUATION_KEY,
                       "configuration": $config,
                       "parameters": {
                         "is-setup": false,
-                        "target-rev": $target_rev,
-                        "target-commit-hash": $target_commit_hash
+                        "target-rev": $ENV.TARGET_REV,
+                        "target-commit-hash": $ENV.TARGET_COMMIT_HASH,
+                        "build-name": $build_name
                       }
                     }'
-                  )" \
-                  https://circleci.com/api/v2/pipeline/continue
+                )" \
+                https://circleci.com/api/v2/pipeline/continue
             else
               echo 'We have already built this target with the tag(s) above. Halting the pipeline.'
               circleci-agent step halt
             fi
+          environment:
+            FORCE_BUILD: << pipeline.parameters.force-build >>
+            SRC_RELEASE_LIST_URL: << pipeline.parameters.src-releases-list-url >>
+            SRC_REPO: << pipeline.parameters.src-repo >>
+            CONTINUE_CONFIG: << parameters.continue-config >>
 
-  build-linux:
-    executor: archlinux
+  build-linux-amd64:
+    executor: archlinux-docker
+    parameters:
+      artefact-identifier:
+        type: string
+        default: iperf3-<< pipeline.parameters.build-name >>-linux-amd64
+    environment:
+      ARTEFACT_IDENTIFIER: << parameters.artefact-identifier >>
     steps:
       - run:
           name: Install dependencies
@@ -133,34 +136,43 @@ jobs:
             cd iperf
 
             git init
-            git remote add origin << pipeline.parameters.src-repo >>
-            git fetch --depth 1 origin << pipeline.parameters.target-commit-hash >>
-            git checkout << pipeline.parameters.target-commit-hash >>
+            git remote add origin "${SRC_REPO}"
+            git fetch --depth 1 origin "${TARGET_COMMIT_HASH}"
+            git checkout "${TARGET_COMMIT_HASH}"
+          environment:
+            SRC_REPO: << pipeline.parameters.src-repo >>
+            TARGET_COMMIT_HASH: << pipeline.parameters.target-commit-hash >>
       - run:
           name: Build iperf3
           working_directory: iperf
           command: |
-            IPERF3_MAKE_PREFIX=$(eval echo $CIRCLE_WORKING_DIRECTORY)/<< pipeline.parameters.label-linux >>
-            mkdir -p $IPERF3_MAKE_PREFIX
+            IPERF3_MAKE_PREFIX="$(eval echo "${CIRCLE_WORKING_DIRECTORY}")/${ARTEFACT_IDENTIFIER}"
+            mkdir -p "${IPERF3_MAKE_PREFIX}"
 
-            ./configure --prefix=$IPERF3_MAKE_PREFIX << pipeline.parameters.common-build-params >>
+            ./configure --prefix="${IPERF3_MAKE_PREFIX}" --disable-shared --disable-static
             make
             make install
 
-            mkdir -p $IPERF3_MAKE_PREFIX/share/doc/iperf3
-            cp LICENSE $IPERF3_MAKE_PREFIX/share/doc/iperf3
+            mkdir -p "${IPERF3_MAKE_PREFIX}/share/doc/iperf3"
+            cp LICENSE "${IPERF3_MAKE_PREFIX}/share/doc/iperf3"
       - run:
           name: Create a tarball
-          command: tar -czf << pipeline.parameters.label-linux >>.tar.gz << pipeline.parameters.label-linux >>
+          command: tar -czf "${ARTEFACT_IDENTIFIER}.tar.gz" "${ARTEFACT_IDENTIFIER}"
       - persist_to_workspace:
           root: .
           paths:
-            - << pipeline.parameters.label-linux >>.tar.gz
+            - << parameters.artefact-identifier >>.tar.gz
       - store_artifacts:
-          path: << pipeline.parameters.label-linux >>.tar.gz
+          path: << parameters.artefact-identifier >>.tar.gz
 
-  build-windows:
+  build-windows-amd64:
     executor: windows
+    parameters:
+      artefact-identifier:
+        type: string
+        default: iperf3-<< pipeline.parameters.build-name >>-windows-amd64
+    environment:
+      ARTEFACT_IDENTIFIER: << parameters.artefact-identifier >>
     steps:
       - run:
           name: Download Cygwin installer
@@ -173,55 +185,64 @@ jobs:
           name: Clone iperf3 with Cygwin
           shell: C:\\cygwin64\\bin\\bash.exe --login -eo pipefail
           command: |
-            eval mkdir -p $CIRCLE_WORKING_DIRECTORY
-            eval cd $CIRCLE_WORKING_DIRECTORY
+            eval mkdir -p "${CIRCLE_WORKING_DIRECTORY}"
+            eval cd "${CIRCLE_WORKING_DIRECTORY}"
 
             mkdir -p iperf
             cd iperf
 
             git init
-            git remote add origin << pipeline.parameters.src-repo >>
-            git fetch --depth 1 origin << pipeline.parameters.target-commit-hash >>
-            git checkout << pipeline.parameters.target-commit-hash >>
+            git remote add origin "${SRC_REPO}"
+            git fetch --depth 1 origin "${TARGET_COMMIT_HASH}"
+            git checkout "${TARGET_COMMIT_HASH}"
+          environment:
+            SRC_REPO: << pipeline.parameters.src-repo >>
+            TARGET_COMMIT_HASH: << pipeline.parameters.target-commit-hash >>
       - run:
           name: Build iperf3 with Cygwin
           shell: C:\\cygwin64\\bin\\bash.exe --login -eo pipefail
           command: |
-            NATIVE_WORK_DIR=$OLDPWD
+            NATIVE_WORK_DIR="${OLDPWD}"
 
-            IPERF3_MAKE_PREFIX=$(eval echo $CIRCLE_WORKING_DIRECTORY)/<< pipeline.parameters.label-windows >>
-            mkdir -p $IPERF3_MAKE_PREFIX
+            IPERF3_MAKE_PREFIX="$(eval echo "${CIRCLE_WORKING_DIRECTORY}")/${ARTEFACT_IDENTIFIER}"
+            mkdir -p "${IPERF3_MAKE_PREFIX}"
 
-            eval cd $CIRCLE_WORKING_DIRECTORY/iperf
-            ./configure --prefix=$IPERF3_MAKE_PREFIX << pipeline.parameters.common-build-params >>
+            eval cd "${CIRCLE_WORKING_DIRECTORY}/iperf"
+            ./configure --prefix="${IPERF3_MAKE_PREFIX}" --disable-shared --disable-static
             make
             make install
 
             # Bundle dependencies
-            cp /usr/bin/cygwin1.dll /usr/bin/cygcrypto-1.1.dll /usr/bin/cygz.dll -t $IPERF3_MAKE_PREFIX/bin
+            cp /usr/bin/cygwin1.dll /usr/bin/cygcrypto-1.1.dll /usr/bin/cygz.dll -t "${IPERF3_MAKE_PREFIX}/bin"
 
             # Copy licence terms
-            mkdir -p $IPERF3_MAKE_PREFIX/share/doc/iperf3 $IPERF3_MAKE_PREFIX/share/doc/Cygwin
-            cp LICENSE -t $IPERF3_MAKE_PREFIX/share/doc/iperf3
-            cp /usr/share/doc/Cygwin/CYGWIN_LICENSE /usr/share/doc/Cygwin/COPYING -t $IPERF3_MAKE_PREFIX/share/doc/Cygwin
-            cp -r /usr/share/doc/openssl /usr/share/doc/zlib/ -t $IPERF3_MAKE_PREFIX/share/doc
+            mkdir -p "${IPERF3_MAKE_PREFIX}/share/doc/iperf3" "${IPERF3_MAKE_PREFIX}/share/doc/Cygwin"
+            cp LICENSE -t "${IPERF3_MAKE_PREFIX}/share/doc/iperf3"
+            cp /usr/share/doc/Cygwin/CYGWIN_LICENSE /usr/share/doc/Cygwin/COPYING -t "${IPERF3_MAKE_PREFIX}/share/doc/Cygwin"
+            cp -r /usr/share/doc/openssl /usr/share/doc/zlib/ -t "${IPERF3_MAKE_PREFIX}/share/doc"
 
             # Copy the deliverables to the working directory for non-Cygwin environment
-            cp -r $(eval echo $CIRCLE_WORKING_DIRECTORY)/. $NATIVE_WORK_DIR
+            cp -r "$(eval echo "${CIRCLE_WORKING_DIRECTORY}")/." "${NATIVE_WORK_DIR}"
       - run:
           name: Create a Zip file
           command: |
             $ProgressPreference = "SilentlyContinue"
-            Compress-Archive .\\<< pipeline.parameters.label-windows >> .\\<< pipeline.parameters.label-windows >>.zip
+            Compress-Archive ".\\${env:ARTEFACT_IDENTIFIER}" ".\\${env:ARTEFACT_IDENTIFIER}.zip"
       - persist_to_workspace:
           root: .
           paths:
-            - << pipeline.parameters.label-windows >>.zip
+            - << parameters.artefact-identifier >>.zip
       - store_artifacts:
-          path: << pipeline.parameters.label-windows >>.zip
+          path: << parameters.artefact-identifier >>.zip
 
-  build-macos:
+  build-macos-amd64:
     executor: macos
+    parameters:
+      artefact-identifier:
+        type: string
+        default: iperf3-<< pipeline.parameters.build-name >>-macos-amd64
+    environment:
+      ARTEFACT_IDENTIFIER: << parameters.artefact-identifier >>
     steps:
       - run:
           name: Clone iperf3
@@ -230,74 +251,89 @@ jobs:
             cd iperf
 
             git init
-            git remote add origin << pipeline.parameters.src-repo >>
-            git fetch --depth 1 origin << pipeline.parameters.target-commit-hash >>
-            git checkout << pipeline.parameters.target-commit-hash >>
+            git remote add origin "${SRC_REPO}"
+            git fetch --depth 1 origin "${TARGET_COMMIT_HASH}"
+            git checkout "${TARGET_COMMIT_HASH}"
+          environment:
+            SRC_REPO: << pipeline.parameters.src-repo >>
+            TARGET_COMMIT_HASH: << pipeline.parameters.target-commit-hash >>
       - run:
           name: Build iperf3
           working_directory: iperf
           command: |
-            IPERF3_MAKE_PREFIX=$(eval echo $CIRCLE_WORKING_DIRECTORY)/<< pipeline.parameters.label-macos >>
-            mkdir -p $IPERF3_MAKE_PREFIX
+            IPERF3_MAKE_PREFIX="$(eval echo "${CIRCLE_WORKING_DIRECTORY}")/${ARTEFACT_IDENTIFIER}"
+            mkdir -p "${IPERF3_MAKE_PREFIX}"
 
-            ./configure --prefix=$IPERF3_MAKE_PREFIX --with-openssl=$(brew --prefix openssl) << pipeline.parameters.common-build-params >>
+            ./configure --prefix="${IPERF3_MAKE_PREFIX}" --with-openssl="$(brew --prefix openssl)" --disable-shared --disable-static
             make
             make install
 
             # Copy licence terms for iperf
-            mkdir -p $IPERF3_MAKE_PREFIX/share/doc/iperf3
-            cp LICENSE $IPERF3_MAKE_PREFIX/share/doc/iperf3
+            mkdir -p "${IPERF3_MAKE_PREFIX}/share/doc/iperf3"
+            cp LICENSE "${IPERF3_MAKE_PREFIX}/share/doc/iperf3"
 
             # Postruns
-            cd $IPERF3_MAKE_PREFIX/bin
+            cd "${IPERF3_MAKE_PREFIX}/bin"
             # Copy linked OpenSSL libraris to the current directory
             # and tell the linker to refer to them
-            otool -L iperf3 | grep openssl | awk '{ print $1 }' | while read dylib
-            do
-              name=$(basename $dylib)
-              cp $dylib ./
-              chmod u+w $name
-              install_name_tool -change $dylib @executable_path/$name iperf3
+            otool -L iperf3 | grep openssl | awk '{ print $1 }' | while read -r dylib; do
+              name=$(basename "${dylib}")
+              cp "${dylib}" ./
+              chmod u+w "${name}"
+              install_name_tool -change "${dylib}" "@executable_path/${name}" iperf3
             done
             # Modify libssl as well
-            otool -L libssl.1.1.dylib | grep openssl | awk '{ print $1 }' | while read dylib
-            do
-              install_name_tool -change $dylib @executable_path/$(basename $dylib) libssl.1.1.dylib
+            find . -name "libssl.*.dylib" | while read -r libssl; do
+              otool -L "${libssl}" | grep openssl | awk '{ print $1 }' | while read -r dylib; do
+                install_name_tool -change "${dylib}" "@executable_path/$(basename "${dylib}")" "${libssl}"
+              done
             done
             # Copy licence terms for OpenSSL
-            mkdir -p $IPERF3_MAKE_PREFIX/share/doc/openssl
-            cp $(brew --prefix openssl)/LICENSE $IPERF3_MAKE_PREFIX/share/doc/openssl
+            mkdir -p "${IPERF3_MAKE_PREFIX}/share/doc/openssl"
+            cp "$(brew --prefix openssl)/LICENSE.txt" "${IPERF3_MAKE_PREFIX}/share/doc/openssl"
       - run:
           name: Create a Zip file
-          command: zip -r << pipeline.parameters.label-macos >>.zip << pipeline.parameters.label-macos >>
+          command: zip -r "${ARTEFACT_IDENTIFIER}.zip" "${ARTEFACT_IDENTIFIER}"
       - persist_to_workspace:
           root: .
           paths:
-            - << pipeline.parameters.label-macos >>.zip
+            - << parameters.artefact-identifier >>.zip
       - store_artifacts:
-          path: << pipeline.parameters.label-macos >>.zip
+          path: << parameters.artefact-identifier >>.zip
 
   test-unified:
     parameters:
       executor:
         type: string
-      dir:
+      extract-cmd:
+        type: string
+      artefact-identifier:
         type: string
     executor: << parameters.executor >>
     steps:
+      - attach_workspace:
+          at: .
+      - run:
+          name: Extracting executable
+          command: << parameters.extract-cmd >>
+          environment:
+            BUILD_NAME: << pipeline.parameters.build-name >>
       - run:
           name: Test executable
-          command: << parameters.dir >>/bin/iperf3 -v
+          command: bin/iperf3 -v
+          working_directory: << parameters.artefact-identifier >>
       - run:
           name: Run as a server
-          command: << parameters.dir >>/bin/iperf3 -s
+          command: bin/iperf3 -s
+          working_directory: << parameters.artefact-identifier >>
           background: true
       - run:
           name: Run as a client
-          command: << parameters.dir >>/bin/iperf3 -c localhost -R
+          command: bin/iperf3 -c localhost -R
+          working_directory: << parameters.artefact-identifier >>
 
   release:
-    executor: ubuntu
+    executor: ubuntu-docker
     steps:
       - attach_workspace:
           at: .
@@ -313,9 +349,10 @@ jobs:
       - run:
           name: Create a release
           command: |
-            TARGET_COMMIT_HASH="<< pipeline.parameters.target-commit-hash >>"
-            IPERF3_BUILD_VERSION="<< pipeline.parameters.target-rev >>-${TARGET_COMMIT_HASH:0:7}-${CIRCLE_BUILD_NUM}-${CIRCLE_SHA1:0:7}"
-            gh release create -R ${CIRCLE_PROJECT_USERNAME}/${CIRCLE_PROJECT_REPONAME} -t "${IPERF3_BUILD_VERSION}" -n "Source: https://github.com/esnet/iperf/tree/<< pipeline.parameters.target-commit-hash >>" "${IPERF3_BUILD_VERSION}" *
+            gh release create -R "${CIRCLE_PROJECT_USERNAME}/${CIRCLE_PROJECT_REPONAME}" -t "${IPERF3_BUILD_VERSION}" -n "Source: https://github.com/esnet/iperf/tree/${TARGET_COMMIT_HASH}" "${IPERF3_BUILD_VERSION}" ./*
+          environment:
+            TARGET_COMMIT_HASH: << pipeline.parameters.target-commit-hash >>
+            IPERF3_BUILD_VERSION: << pipeline.parameters.build-name >>
 
 workflows:
   setup:
@@ -327,57 +364,41 @@ workflows:
     when:
       not: << pipeline.parameters.is-setup >>
     jobs:
-      - build-linux
-      - build-windows
-      - build-macos
+      - build-linux-amd64
+      - build-windows-amd64
+      - build-macos-amd64
 
       - test-unified:
-          name: test-linux
+          name: test-linux-amd64
           requires:
-            - build-linux
-          executor: ubuntu
-          dir: << pipeline.parameters.label-linux >>
-          pre-steps:
-            - attach_workspace:
-                at: .
-            - run:
-                name: Extract << pipeline.parameters.label-linux >>.tar.gz
-                command: tar -xf << pipeline.parameters.label-linux >>.tar.gz
+            - build-linux-amd64
+          executor: ubuntu-docker
+          extract-cmd: tar -xf "iperf3-${BUILD_NAME}-linux-amd64.tar.gz"
+          artefact-identifier: iperf3-<< pipeline.parameters.build-name >>-linux-amd64
       - test-unified:
-          name: test-windows
+          name: test-windows-amd64
           requires:
-            - build-windows
+            - build-windows-amd64
           executor: windows
-          dir: << pipeline.parameters.label-windows >>
-          pre-steps:
-            - attach_workspace:
-                at: .
-            - run:
-                name: Extract << pipeline.parameters.label-windows >>.zip
-                command: |
-                  $ProgressPreference = "SilentlyContinue"
-                  Expand-Archive .\\<< pipeline.parameters.label-windows >>.zip .
+          extract-cmd: |
+            $ProgressPreference = "SilentlyContinue"
+            Expand-Archive "iperf3-${env:BUILD_NAME}-windows-amd64.zip" .
+          artefact-identifier: iperf3-<< pipeline.parameters.build-name >>-windows-amd64
       - test-unified:
-          name: test-macos
+          name: test-macos-amd64
           requires:
-            - build-macos
+            - build-macos-amd64
           executor: macos
-          dir: << pipeline.parameters.label-macos >>
-          pre-steps:
-            - attach_workspace:
-                at: .
-            - run:
-                name: Uninstall pre-installed OpenSSL
-                command: brew uninstall --ignore-dependencies openssl
-            - run:
-                name: Extract << pipeline.parameters.label-macos >>.zip
-                command: unzip << pipeline.parameters.label-macos >>.zip
+          extract-cmd: |
+            brew uninstall --ignore-dependencies openssl
+            unzip "iperf3-${BUILD_NAME}-macos-amd64.zip"
+          artefact-identifier: iperf3-<< pipeline.parameters.build-name >>-macos-amd64
 
       - release:
           requires:
-            - test-linux
-            - test-windows
-            - test-macos
+            - test-linux-amd64
+            - test-windows-amd64
+            - test-macos-amd64
           context: github
           filters:
             branches:
