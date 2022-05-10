@@ -361,7 +361,7 @@ jobs:
           name: Extracting executable
           command: << parameters.extract-cmd >>
           environment:
-            BUILD_NAME: << pipeline.parameters.build-name >>
+            ARTEFACT_IDENTIFIER: << parameters.artefact-identifier >>
       - run:
           name: Test executable
           command: bin/iperf3 -v
@@ -418,14 +418,14 @@ workflows:
           requires:
             - build-linux-amd64
           executor: archlinux-docker
-          extract-cmd: tar -xf "iperf3-${BUILD_NAME}-linux-amd64.tar.gz"
+          extract-cmd: tar -xf "${ARTEFACT_IDENTIFIER}.tar.gz"
           artefact-identifier: iperf3-<< pipeline.parameters.build-name >>-linux-amd64
       - test-unified:
           name: test-linux-aarch64
           requires:
             - build-linux-aarch64
           executor: ubuntu-machine-aarch64
-          extract-cmd: tar -xf "iperf3-${BUILD_NAME}-linux-aarch64.tar.gz"
+          extract-cmd: tar -xf "${ARTEFACT_IDENTIFIER}.tar.gz"
           artefact-identifier: iperf3-<< pipeline.parameters.build-name >>-linux-aarch64
       - test-unified:
           name: test-windows-amd64
@@ -434,7 +434,7 @@ workflows:
           executor: windows
           extract-cmd: |
             $ProgressPreference = "SilentlyContinue"
-            Expand-Archive "iperf3-${env:BUILD_NAME}-windows-amd64.zip" .
+            Expand-Archive "${env:ARTEFACT_IDENTIFIER}.zip" .
           artefact-identifier: iperf3-<< pipeline.parameters.build-name >>-windows-amd64
       - test-unified:
           name: test-macos-amd64
@@ -443,7 +443,7 @@ workflows:
           executor: macos
           extract-cmd: |
             brew uninstall --ignore-dependencies openssl
-            unzip "iperf3-${BUILD_NAME}-macos-amd64.zip"
+            unzip "${ARTEFACT_IDENTIFIER}.zip"
           artefact-identifier: iperf3-<< pipeline.parameters.build-name >>-macos-amd64
 
       - release:
