@@ -39,6 +39,10 @@ executors:
     docker:
       - image: archlinux
     resource_class: medium
+  ubuntu-machine-aarch64:
+    machine:
+      image: ubuntu-2004:current
+    resource_class: arm.medium
   windows:
     machine:
       image: windows-server-2019-vs2019:stable
@@ -118,7 +122,7 @@ jobs:
             CONTINUE_CONFIG: << parameters.continue-config >>
 
   build-linux-amd64:
-    executor: archlinux-docker
+    executor: ubuntu-docker
     parameters:
       artefact-identifier:
         type: string
@@ -128,7 +132,9 @@ jobs:
     steps:
       - run:
           name: Install dependencies
-          command: pacman -Syu --noconfirm git gcc make
+          command: |
+            apt update
+            apt install -y git gcc make
       - run:
           name: Clone iperf3
           command: |
@@ -149,7 +155,7 @@ jobs:
             IPERF3_MAKE_PREFIX="$(eval echo "${CIRCLE_WORKING_DIRECTORY}")/${ARTEFACT_IDENTIFIER}"
             mkdir -p "${IPERF3_MAKE_PREFIX}"
 
-            ./configure --prefix="${IPERF3_MAKE_PREFIX}" --disable-shared --disable-static
+            ./configure --prefix="${IPERF3_MAKE_PREFIX}" --disable-shared --disable-static --enable-static-bin
             make
             make install
 
@@ -158,6 +164,61 @@ jobs:
       - run:
           name: Create a tarball
           command: tar -czf "${ARTEFACT_IDENTIFIER}.tar.gz" "${ARTEFACT_IDENTIFIER}"
+      - persist_to_workspace:
+          root: .
+          paths:
+            - << parameters.artefact-identifier >>.tar.gz
+      - store_artifacts:
+          path: << parameters.artefact-identifier >>.tar.gz
+
+  build-linux-aarch64:
+    executor: ubuntu-machine-aarch64
+    parameters:
+      artefact-identifier:
+        type: string
+        default: iperf3-<< pipeline.parameters.build-name >>-linux-aarch64
+    environment:
+      ARTEFACT_IDENTIFIER: << parameters.artefact-identifier >>
+    steps:
+      - run:
+          name: Run everything inside a latest clean Docker container
+          command: |
+            docker run --rm -it -e CIRCLE_WORKING_DIRECTORY -e SRC_REPO -e TARGET_COMMIT_HASH -e ARTEFACT_IDENTIFIER -v "$(pwd)":/root -w /root ubuntu:rolling bash -c '''
+
+            set -euo pipefail
+
+            # Install dependencies
+            apt update
+            apt install -y git gcc make
+
+            # Clone iperf3
+            mkdir -p iperf
+            pushd iperf
+
+            git init
+            git remote add origin "${SRC_REPO}"
+            git fetch --depth 1 origin "${TARGET_COMMIT_HASH}"
+            git checkout "${TARGET_COMMIT_HASH}"
+
+            # Build iperf3
+            IPERF3_MAKE_PREFIX="/root/${ARTEFACT_IDENTIFIER}"
+            mkdir -p "${IPERF3_MAKE_PREFIX}"
+
+            ./configure --prefix="${IPERF3_MAKE_PREFIX}" --disable-shared --disable-static --enable-static-bin
+            make
+            make install
+
+            mkdir -p "${IPERF3_MAKE_PREFIX}/share/doc/iperf3"
+            cp LICENSE "${IPERF3_MAKE_PREFIX}/share/doc/iperf3"
+
+            # Create a tarball
+            popd
+            tar -czf "${ARTEFACT_IDENTIFIER}.tar.gz" "${ARTEFACT_IDENTIFIER}"
+
+            '''
+          environment:
+            SRC_REPO: << pipeline.parameters.src-repo >>
+            TARGET_COMMIT_HASH: << pipeline.parameters.target-commit-hash >>
       - persist_to_workspace:
           root: .
           paths:
@@ -261,6 +322,9 @@ jobs:
           name: Build iperf3
           working_directory: iperf
           command: |
+            find /usr/local -name libssl.3.dylib -exec rm -f {} \;
+            find /usr/local -name libcrypto.3.dylib -exec rm -f {} \;
+
             IPERF3_MAKE_PREFIX="$(eval echo "${CIRCLE_WORKING_DIRECTORY}")/${ARTEFACT_IDENTIFIER}"
             mkdir -p "${IPERF3_MAKE_PREFIX}"
 
@@ -271,26 +335,6 @@ jobs:
             # Copy licence terms for iperf
             mkdir -p "${IPERF3_MAKE_PREFIX}/share/doc/iperf3"
             cp LICENSE "${IPERF3_MAKE_PREFIX}/share/doc/iperf3"
-
-            # Postruns
-            cd "${IPERF3_MAKE_PREFIX}/bin"
-            # Copy linked OpenSSL libraris to the current directory
-            # and tell the linker to refer to them
-            otool -L iperf3 | grep openssl | awk '{ print $1 }' | while read -r dylib; do
-              name=$(basename "${dylib}")
-              cp "${dylib}" ./
-              chmod u+w "${name}"
-              install_name_tool -change "${dylib}" "@executable_path/${name}" iperf3
-            done
-            # Modify libssl as well
-            find . -name "libssl.*.dylib" | while read -r libssl; do
-              otool -L "${libssl}" | grep openssl | awk '{ print $1 }' | while read -r dylib; do
-                install_name_tool -change "${dylib}" "@executable_path/$(basename "${dylib}")" "${libssl}"
-              done
-            done
-            # Copy licence terms for OpenSSL
-            mkdir -p "${IPERF3_MAKE_PREFIX}/share/doc/openssl"
-            cp "$(brew --prefix openssl)/LICENSE.txt" "${IPERF3_MAKE_PREFIX}/share/doc/openssl"
       - run:
           name: Create a Zip file
           command: zip -r "${ARTEFACT_IDENTIFIER}.zip" "${ARTEFACT_IDENTIFIER}"
@@ -317,7 +361,7 @@ jobs:
           name: Extracting executable
           command: << parameters.extract-cmd >>
           environment:
-            BUILD_NAME: << pipeline.parameters.build-name >>
+            ARTEFACT_IDENTIFIER: << parameters.artefact-identifier >>
       - run:
           name: Test executable
           command: bin/iperf3 -v
@@ -327,6 +371,9 @@ jobs:
           command: bin/iperf3 -s
           working_directory: << parameters.artefact-identifier >>
           background: true
+      - run:
+          name: Pause for a while for the server process to be up and running
+          command: exit
       - run:
           name: Run as a client
           command: bin/iperf3 -c localhost -R
@@ -341,7 +388,7 @@ jobs:
           name: Install dependencies
           command: |
             apt update
-            apt -y install curl git
+            apt install -y curl git
 
             tmpPath=$(mktemp)
             curl -sSJL https://api.github.com/repos/cli/cli/releases/latest | grep -o 'https://github.com/cli/cli/releases/download/[^/]\{1,\}/gh_[^/]\{1,\}_linux_amd64.deb' | xargs curl -o $tmpPath -JL
@@ -365,6 +412,7 @@ workflows:
       not: << pipeline.parameters.is-setup >>
     jobs:
       - build-linux-amd64
+      - build-linux-aarch64
       - build-windows-amd64
       - build-macos-amd64
 
@@ -372,9 +420,16 @@ workflows:
           name: test-linux-amd64
           requires:
             - build-linux-amd64
-          executor: ubuntu-docker
-          extract-cmd: tar -xf "iperf3-${BUILD_NAME}-linux-amd64.tar.gz"
+          executor: archlinux-docker
+          extract-cmd: tar -xf "${ARTEFACT_IDENTIFIER}.tar.gz"
           artefact-identifier: iperf3-<< pipeline.parameters.build-name >>-linux-amd64
+      - test-unified:
+          name: test-linux-aarch64
+          requires:
+            - build-linux-aarch64
+          executor: ubuntu-machine-aarch64
+          extract-cmd: tar -xf "${ARTEFACT_IDENTIFIER}.tar.gz"
+          artefact-identifier: iperf3-<< pipeline.parameters.build-name >>-linux-aarch64
       - test-unified:
           name: test-windows-amd64
           requires:
@@ -382,7 +437,7 @@ workflows:
           executor: windows
           extract-cmd: |
             $ProgressPreference = "SilentlyContinue"
-            Expand-Archive "iperf3-${env:BUILD_NAME}-windows-amd64.zip" .
+            Expand-Archive "${env:ARTEFACT_IDENTIFIER}.zip" .
           artefact-identifier: iperf3-<< pipeline.parameters.build-name >>-windows-amd64
       - test-unified:
           name: test-macos-amd64
@@ -391,7 +446,7 @@ workflows:
           executor: macos
           extract-cmd: |
             brew uninstall --ignore-dependencies openssl
-            unzip "iperf3-${BUILD_NAME}-macos-amd64.zip"
+            unzip "${ARTEFACT_IDENTIFIER}.zip"
           artefact-identifier: iperf3-<< pipeline.parameters.build-name >>-macos-amd64
 
       - release:
