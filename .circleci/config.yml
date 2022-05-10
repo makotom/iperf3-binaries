@@ -452,6 +452,7 @@ workflows:
       - release:
           requires:
             - test-linux-amd64
+            - test-linux-aarch64
             - test-windows-amd64
             - test-macos-amd64
           context: github
