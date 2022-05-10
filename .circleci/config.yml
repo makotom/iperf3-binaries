@@ -155,7 +155,7 @@ jobs:
             IPERF3_MAKE_PREFIX="$(eval echo "${CIRCLE_WORKING_DIRECTORY}")/${ARTEFACT_IDENTIFIER}"
             mkdir -p "${IPERF3_MAKE_PREFIX}"
 
-            ./configure --prefix="${IPERF3_MAKE_PREFIX}" --disable-shared --disable-static
+            ./configure --prefix="${IPERF3_MAKE_PREFIX}" --disable-shared --disable-static --enable-static-bin
             make
             make install
 
@@ -322,6 +322,9 @@ jobs:
           name: Build iperf3
           working_directory: iperf
           command: |
+            find /usr/local -name libssl.3.dylib -exec rm -f {} \;
+            find /usr/local -name libcrypto.3.dylib -exec rm -f {} \;
+
             IPERF3_MAKE_PREFIX="$(eval echo "${CIRCLE_WORKING_DIRECTORY}")/${ARTEFACT_IDENTIFIER}"
             mkdir -p "${IPERF3_MAKE_PREFIX}"
 
@@ -332,26 +335,6 @@ jobs:
             # Copy licence terms for iperf
             mkdir -p "${IPERF3_MAKE_PREFIX}/share/doc/iperf3"
             cp LICENSE "${IPERF3_MAKE_PREFIX}/share/doc/iperf3"
-
-            # Postruns
-            cd "${IPERF3_MAKE_PREFIX}/bin"
-            # Copy linked OpenSSL libraris to the current directory
-            # and tell the linker to refer to them
-            otool -L iperf3 | grep openssl | awk '{ print $1 }' | while read -r dylib; do
-              name=$(basename "${dylib}")
-              cp "${dylib}" ./
-              chmod u+w "${name}"
-              install_name_tool -change "${dylib}" "@executable_path/${name}" iperf3
-            done
-            # Modify libssl as well
-            find . -name "libssl.*.dylib" | while read -r libssl; do
-              otool -L "${libssl}" | grep openssl | awk '{ print $1 }' | while read -r dylib; do
-                install_name_tool -change "${dylib}" "@executable_path/$(basename "${dylib}")" "${libssl}"
-              done
-            done
-            # Copy licence terms for OpenSSL
-            mkdir -p "${IPERF3_MAKE_PREFIX}/share/doc/openssl"
-            cp "$(brew --prefix openssl)/LICENSE.txt" "${IPERF3_MAKE_PREFIX}/share/doc/openssl"
       - run:
           name: Create a Zip file
           command: zip -r "${ARTEFACT_IDENTIFIER}.zip" "${ARTEFACT_IDENTIFIER}"
