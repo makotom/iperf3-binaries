@@ -39,6 +39,10 @@ executors:
     docker:
       - image: archlinux
     resource_class: medium
+  ubuntu-machine-aarch64:
+    machine:
+      image: ubuntu-2004:current
+    resource_class: arm.medium
   windows:
     machine:
       image: windows-server-2019-vs2019:stable
@@ -158,6 +162,61 @@ jobs:
       - run:
           name: Create a tarball
           command: tar -czf "${ARTEFACT_IDENTIFIER}.tar.gz" "${ARTEFACT_IDENTIFIER}"
+      - persist_to_workspace:
+          root: .
+          paths:
+            - << parameters.artefact-identifier >>.tar.gz
+      - store_artifacts:
+          path: << parameters.artefact-identifier >>.tar.gz
+
+  build-linux-aarch64:
+    executor: ubuntu-machine-aarch64
+    parameters:
+      artefact-identifier:
+        type: string
+        default: iperf3-<< pipeline.parameters.build-name >>-linux-aarch64
+    environment:
+      ARTEFACT_IDENTIFIER: << parameters.artefact-identifier >>
+    steps:
+      - run:
+          name: Run everything inside a latest clean Docker container
+          command: |
+            docker run --rm -it -e CIRCLE_WORKING_DIRECTORY -e SRC_REPO -e TARGET_COMMIT_HASH -e ARTEFACT_IDENTIFIER -v "$(pwd)":/root -w /root ubuntu:rolling bash -c '''
+
+            set -euo pipefail
+
+            # Install dependencies
+            apt update
+            apt install -y git gcc make
+
+            # Clone iperf3
+            mkdir -p iperf
+            pushd iperf
+
+            git init
+            git remote add origin "${SRC_REPO}"
+            git fetch --depth 1 origin "${TARGET_COMMIT_HASH}"
+            git checkout "${TARGET_COMMIT_HASH}"
+
+            # Build iperf3
+            IPERF3_MAKE_PREFIX="/root/${ARTEFACT_IDENTIFIER}"
+            mkdir -p "${IPERF3_MAKE_PREFIX}"
+
+            ./configure --prefix="${IPERF3_MAKE_PREFIX}" --disable-shared --disable-static --enable-static-bin
+            make
+            make install
+
+            mkdir -p "${IPERF3_MAKE_PREFIX}/share/doc/iperf3"
+            cp LICENSE "${IPERF3_MAKE_PREFIX}/share/doc/iperf3"
+
+            # Create a tarball
+            popd
+            tar -czf "${ARTEFACT_IDENTIFIER}.tar.gz" "${ARTEFACT_IDENTIFIER}"
+
+            '''
+          environment:
+            SRC_REPO: << pipeline.parameters.src-repo >>
+            TARGET_COMMIT_HASH: << pipeline.parameters.target-commit-hash >>
       - persist_to_workspace:
           root: .
           paths:
@@ -365,6 +424,7 @@ workflows:
       not: << pipeline.parameters.is-setup >>
     jobs:
       - build-linux-amd64
+      - build-linux-aarch64
       - build-windows-amd64
       - build-macos-amd64
 
@@ -375,6 +435,13 @@ workflows:
           executor: ubuntu-docker
           extract-cmd: tar -xf "iperf3-${BUILD_NAME}-linux-amd64.tar.gz"
           artefact-identifier: iperf3-<< pipeline.parameters.build-name >>-linux-amd64
+      - test-unified:
+          name: test-linux-aarch64
+          requires:
+            - build-linux-aarch64
+          executor: ubuntu-machine-aarch64
+          extract-cmd: tar -xf "iperf3-${BUILD_NAME}-linux-aarch64.tar.gz"
+          artefact-identifier: iperf3-<< pipeline.parameters.build-name >>-linux-aarch64
       - test-unified:
           name: test-windows-amd64
           requires:
