@@ -122,7 +122,7 @@ jobs:
             CONTINUE_CONFIG: << parameters.continue-config >>
 
   build-linux-amd64:
-    executor: archlinux-docker
+    executor: ubuntu-docker
     parameters:
       artefact-identifier:
         type: string
@@ -132,7 +132,9 @@ jobs:
     steps:
       - run:
           name: Install dependencies
-          command: pacman -Syu --noconfirm git gcc make
+          command: |
+            apt update
+            apt install -y git gcc make
       - run:
           name: Clone iperf3
           command: |
@@ -400,7 +402,7 @@ jobs:
           name: Install dependencies
           command: |
             apt update
-            apt -y install curl git
+            apt install -y curl git
 
             tmpPath=$(mktemp)
             curl -sSJL https://api.github.com/repos/cli/cli/releases/latest | grep -o 'https://github.com/cli/cli/releases/download/[^/]\{1,\}/gh_[^/]\{1,\}_linux_amd64.deb' | xargs curl -o $tmpPath -JL
@@ -432,7 +434,7 @@ workflows:
           name: test-linux-amd64
           requires:
             - build-linux-amd64
-          executor: ubuntu-docker
+          executor: archlinux-docker
           extract-cmd: tar -xf "iperf3-${BUILD_NAME}-linux-amd64.tar.gz"
           artefact-identifier: iperf3-<< pipeline.parameters.build-name >>-linux-amd64
       - test-unified:
