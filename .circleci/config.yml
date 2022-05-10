@@ -372,6 +372,9 @@ jobs:
           working_directory: << parameters.artefact-identifier >>
           background: true
       - run:
+          name: Pause for a while for the server process to be up and running
+          command: exit
+      - run:
           name: Run as a client
           command: bin/iperf3 -c localhost -R
           working_directory: << parameters.artefact-identifier >>
