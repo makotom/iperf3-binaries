@@ -163,7 +163,8 @@ jobs:
             cp LICENSE "${IPERF3_MAKE_PREFIX}/share/doc/iperf3"
       - run:
           name: Create a tarball
-          command: tar -czf "${ARTEFACT_IDENTIFIER}.tar.gz" "${ARTEFACT_IDENTIFIER}"
+          command: tar -czf "$(eval echo "${CIRCLE_WORKING_DIRECTORY}")/${ARTEFACT_IDENTIFIER}.tar.gz" -- *
+          working_directory: << parameters.artefact-identifier >>
       - persist_to_workspace:
           root: .
           paths:
@@ -184,37 +185,36 @@ jobs:
           name: Run everything inside a latest clean Docker container
           command: |
             docker run --rm -it -e CIRCLE_WORKING_DIRECTORY -e SRC_REPO -e TARGET_COMMIT_HASH -e ARTEFACT_IDENTIFIER -v "$(pwd)":/root -w /root ubuntu:rolling bash -c '''
+              set -euo pipefail
 
-            set -euo pipefail
+              # Install dependencies
+              apt update
+              apt install -y git gcc make
 
-            # Install dependencies
-            apt update
-            apt install -y git gcc make
+              # Clone iperf3
+              mkdir -p iperf
+              pushd iperf
 
-            # Clone iperf3
-            mkdir -p iperf
-            pushd iperf
+              git init
+              git remote add origin "${SRC_REPO}"
+              git fetch --depth 1 origin "${TARGET_COMMIT_HASH}"
+              git checkout "${TARGET_COMMIT_HASH}"
 
-            git init
-            git remote add origin "${SRC_REPO}"
-            git fetch --depth 1 origin "${TARGET_COMMIT_HASH}"
-            git checkout "${TARGET_COMMIT_HASH}"
+              # Build iperf3
+              IPERF3_MAKE_PREFIX="/root/${ARTEFACT_IDENTIFIER}"
+              mkdir -p "${IPERF3_MAKE_PREFIX}"
 
-            # Build iperf3
-            IPERF3_MAKE_PREFIX="/root/${ARTEFACT_IDENTIFIER}"
-            mkdir -p "${IPERF3_MAKE_PREFIX}"
+              ./configure --prefix="${IPERF3_MAKE_PREFIX}" --disable-shared --disable-static --enable-static-bin
+              make
+              make install
 
-            ./configure --prefix="${IPERF3_MAKE_PREFIX}" --disable-shared --disable-static --enable-static-bin
-            make
-            make install
+              mkdir -p "${IPERF3_MAKE_PREFIX}/share/doc/iperf3"
+              cp LICENSE "${IPERF3_MAKE_PREFIX}/share/doc/iperf3"
 
-            mkdir -p "${IPERF3_MAKE_PREFIX}/share/doc/iperf3"
-            cp LICENSE "${IPERF3_MAKE_PREFIX}/share/doc/iperf3"
-
-            # Create a tarball
-            popd
-            tar -czf "${ARTEFACT_IDENTIFIER}.tar.gz" "${ARTEFACT_IDENTIFIER}"
-
+              # Create a tarball
+              popd
+              pushd "${IPERF3_MAKE_PREFIX}"
+              tar -czf "/root/${ARTEFACT_IDENTIFIER}.tar.gz" -- *
             '''
           environment:
             SRC_REPO: << pipeline.parameters.src-repo >>
@@ -246,9 +246,6 @@ jobs:
           name: Clone iperf3 with Cygwin
           shell: C:\\cygwin64\\bin\\bash.exe --login -eo pipefail
           command: |
-            eval mkdir -p "${CIRCLE_WORKING_DIRECTORY}"
-            eval cd "${CIRCLE_WORKING_DIRECTORY}"
-
             mkdir -p iperf
             cd iperf
 
@@ -264,8 +261,9 @@ jobs:
           shell: C:\\cygwin64\\bin\\bash.exe --login -eo pipefail
           command: |
             NATIVE_WORK_DIR="${OLDPWD}"
+            CIRCLE_WORKING_DIRECTORY="$(pwd)"
 
-            IPERF3_MAKE_PREFIX="$(eval echo "${CIRCLE_WORKING_DIRECTORY}")/${ARTEFACT_IDENTIFIER}"
+            IPERF3_MAKE_PREFIX="${CIRCLE_WORKING_DIRECTORY}/${ARTEFACT_IDENTIFIER}"
             mkdir -p "${IPERF3_MAKE_PREFIX}"
 
             eval cd "${CIRCLE_WORKING_DIRECTORY}/iperf"
@@ -288,7 +286,7 @@ jobs:
           name: Create a Zip file
           command: |
             $ProgressPreference = "SilentlyContinue"
-            Compress-Archive ".\\${env:ARTEFACT_IDENTIFIER}" ".\\${env:ARTEFACT_IDENTIFIER}.zip"
+            Compress-Archive ".\\${env:ARTEFACT_IDENTIFIER}\\*" ".\\${env:ARTEFACT_IDENTIFIER}.zip"
       - persist_to_workspace:
           root: .
           paths:
@@ -337,7 +335,8 @@ jobs:
             cp LICENSE "${IPERF3_MAKE_PREFIX}/share/doc/iperf3"
       - run:
           name: Create a Zip file
-          command: zip -r "${ARTEFACT_IDENTIFIER}.zip" "${ARTEFACT_IDENTIFIER}"
+          command: zip -r "$(eval echo "${CIRCLE_WORKING_DIRECTORY}")/${ARTEFACT_IDENTIFIER}.zip" -- *
+          working_directory: << parameters.artefact-identifier >>
       - persist_to_workspace:
           root: .
           paths:
@@ -365,11 +364,9 @@ jobs:
       - run:
           name: Test executable
           command: bin/iperf3 -v
-          working_directory: << parameters.artefact-identifier >>
       - run:
           name: Run as a server
           command: bin/iperf3 -s
-          working_directory: << parameters.artefact-identifier >>
           background: true
       - run:
           name: Pause for a while for the server process to be up and running
@@ -377,7 +374,6 @@ jobs:
       - run:
           name: Run as a client
           command: bin/iperf3 -c localhost -R
-          working_directory: << parameters.artefact-identifier >>
 
   release:
     executor: ubuntu-docker
