@@ -31,10 +31,14 @@ parameters:
     default: main
 
 executors:
-  ubuntu-docker:
+  ubuntu-docker-amd64:
     docker:
       - image: ubuntu:rolling
     resource_class: medium
+  ubuntu-docker-aarch64:
+    docker:
+      - image: ubuntu:rolling
+    resource_class: arm.medium
   archlinux-docker:
     docker:
       - image: archlinux
@@ -45,17 +49,21 @@ executors:
     resource_class: arm.medium
   windows:
     machine:
-      image: windows-server-2019-vs2019:stable
+      image: windows-server-2022-gui:current
     shell: powershell.exe
     resource_class: windows.medium
-  macos:
+  macos-amd64:
     macos:
-      xcode: 13.3.0
+      xcode: 14.3.1
     resource_class: macos.x86.medium.gen2
+  macos-aarch64:
+    macos:
+      xcode: 14.3.1
+    resource_class: macos.m1.medium.gen1
 
 jobs:
   setup:
-    executor: ubuntu-docker
+    executor: ubuntu-docker-amd64
     parameters:
       continue-config:
         type: string
@@ -122,7 +130,7 @@ jobs:
             CONTINUE_CONFIG: << parameters.continue-config >>
 
   build-linux-amd64:
-    executor: ubuntu-docker
+    executor: ubuntu-docker-amd64
     parameters:
       artefact-identifier:
         type: string
@@ -134,7 +142,7 @@ jobs:
           name: Install dependencies
           command: |
             apt update
-            apt install -y git gcc make
+            apt install -y git gcc make libssl-dev
       - run:
           name: Clone iperf3
           command: |
@@ -173,7 +181,7 @@ jobs:
           path: << parameters.artefact-identifier >>.tar.gz
 
   build-linux-aarch64:
-    executor: ubuntu-machine-aarch64
+    executor: ubuntu-docker-aarch64
     parameters:
       artefact-identifier:
         type: string
@@ -182,43 +190,40 @@ jobs:
       ARTEFACT_IDENTIFIER: << parameters.artefact-identifier >>
     steps:
       - run:
-          name: Run everything inside a latest clean Docker container
+          name: Install dependencies
           command: |
-            docker run --rm -it -e CIRCLE_WORKING_DIRECTORY -e SRC_REPO -e TARGET_COMMIT_HASH -e ARTEFACT_IDENTIFIER -v "$(pwd)":/root -w /root ubuntu:rolling bash -c '''
-              set -euo pipefail
+            apt update
+            apt install -y git gcc make libssl-dev
+      - run:
+          name: Clone iperf3
+          command: |
+            mkdir -p iperf
+            cd iperf
 
-              # Install dependencies
-              apt update
-              apt install -y git gcc make
-
-              # Clone iperf3
-              mkdir -p iperf
-              pushd iperf
-
-              git init
-              git remote add origin "${SRC_REPO}"
-              git fetch --depth 1 origin "${TARGET_COMMIT_HASH}"
-              git checkout "${TARGET_COMMIT_HASH}"
-
-              # Build iperf3
-              IPERF3_MAKE_PREFIX="/root/${ARTEFACT_IDENTIFIER}"
-              mkdir -p "${IPERF3_MAKE_PREFIX}"
-
-              ./configure --prefix="${IPERF3_MAKE_PREFIX}" --disable-shared --disable-static --enable-static-bin
-              make
-              make install
-
-              mkdir -p "${IPERF3_MAKE_PREFIX}/share/doc/iperf3"
-              cp LICENSE "${IPERF3_MAKE_PREFIX}/share/doc/iperf3"
-
-              # Create a tarball
-              popd
-              pushd "${IPERF3_MAKE_PREFIX}"
-              tar -czf "/root/${ARTEFACT_IDENTIFIER}.tar.gz" -- *
-            '''
+            git init
+            git remote add origin "${SRC_REPO}"
+            git fetch --depth 1 origin "${TARGET_COMMIT_HASH}"
+            git checkout "${TARGET_COMMIT_HASH}"
           environment:
             SRC_REPO: << pipeline.parameters.src-repo >>
             TARGET_COMMIT_HASH: << pipeline.parameters.target-commit-hash >>
+      - run:
+          name: Build iperf3
+          working_directory: iperf
+          command: |
+            IPERF3_MAKE_PREFIX="$(eval echo "${CIRCLE_WORKING_DIRECTORY}")/${ARTEFACT_IDENTIFIER}"
+            mkdir -p "${IPERF3_MAKE_PREFIX}"
+
+            ./configure --prefix="${IPERF3_MAKE_PREFIX}" --disable-shared --disable-static --enable-static-bin
+            make
+            make install
+
+            mkdir -p "${IPERF3_MAKE_PREFIX}/share/doc/iperf3"
+            cp LICENSE "${IPERF3_MAKE_PREFIX}/share/doc/iperf3"
+      - run:
+          name: Create a tarball
+          command: tar -czf "$(eval echo "${CIRCLE_WORKING_DIRECTORY}")/${ARTEFACT_IDENTIFIER}.tar.gz" -- *
+          working_directory: << parameters.artefact-identifier >>
       - persist_to_workspace:
           root: .
           paths:
@@ -241,7 +246,9 @@ jobs:
           command: curl -JOL https://cygwin.com/setup-x86_64.exe
       - run:
           name: Install Cygwin and required packages
-          command: .\setup-x86_64.exe -q -s https://mirrors.kernel.org/sourceware/cygwin/ -P libssl-devel,zlib,git,gcc-core,make
+          command: |
+            .\setup-x86_64.exe -q -s https://mirrors.kernel.org/sourceware/cygwin/ -P libssl-devel,zlib,git,gcc-core,make
+            Start-Sleep 120
       - run:
           name: Clone iperf3 with Cygwin
           shell: C:\\cygwin64\\bin\\bash.exe --login -eo pipefail
@@ -295,7 +302,7 @@ jobs:
           path: << parameters.artefact-identifier >>.zip
 
   build-macos-amd64:
-    executor: macos
+    executor: macos-amd64
     parameters:
       artefact-identifier:
         type: string
@@ -322,6 +329,56 @@ jobs:
           command: |
             find /usr/local -name libssl.3.dylib -exec rm -f {} \;
             find /usr/local -name libcrypto.3.dylib -exec rm -f {} \;
+
+            IPERF3_MAKE_PREFIX="$(eval echo "${CIRCLE_WORKING_DIRECTORY}")/${ARTEFACT_IDENTIFIER}"
+            mkdir -p "${IPERF3_MAKE_PREFIX}"
+
+            ./configure --prefix="${IPERF3_MAKE_PREFIX}" --with-openssl="$(brew --prefix openssl)" --disable-shared --disable-static
+            make
+            make install
+
+            # Copy licence terms for iperf
+            mkdir -p "${IPERF3_MAKE_PREFIX}/share/doc/iperf3"
+            cp LICENSE "${IPERF3_MAKE_PREFIX}/share/doc/iperf3"
+      - run:
+          name: Create a Zip file
+          command: zip -r "$(eval echo "${CIRCLE_WORKING_DIRECTORY}")/${ARTEFACT_IDENTIFIER}.zip" -- *
+          working_directory: << parameters.artefact-identifier >>
+      - persist_to_workspace:
+          root: .
+          paths:
+            - << parameters.artefact-identifier >>.zip
+      - store_artifacts:
+          path: << parameters.artefact-identifier >>.zip
+
+  build-macos-aarch64:
+    executor: macos-aarch64
+    parameters:
+      artefact-identifier:
+        type: string
+        default: iperf3-<< pipeline.parameters.build-name >>-macos-aarch64
+    environment:
+      ARTEFACT_IDENTIFIER: << parameters.artefact-identifier >>
+    steps:
+      - run:
+          name: Clone iperf3
+          command: |
+            mkdir -p iperf
+            cd iperf
+
+            git init
+            git remote add origin "${SRC_REPO}"
+            git fetch --depth 1 origin "${TARGET_COMMIT_HASH}"
+            git checkout "${TARGET_COMMIT_HASH}"
+          environment:
+            SRC_REPO: << pipeline.parameters.src-repo >>
+            TARGET_COMMIT_HASH: << pipeline.parameters.target-commit-hash >>
+      - run:
+          name: Build iperf3
+          working_directory: iperf
+          command: |
+            find /opt/homebrew -name libssl.3.dylib -exec rm -f {} \;
+            find /opt/homebrew -name libcrypto.3.dylib -exec rm -f {} \;
 
             IPERF3_MAKE_PREFIX="$(eval echo "${CIRCLE_WORKING_DIRECTORY}")/${ARTEFACT_IDENTIFIER}"
             mkdir -p "${IPERF3_MAKE_PREFIX}"
@@ -376,7 +433,7 @@ jobs:
           command: bin/iperf3 -c localhost -R
 
   release:
-    executor: ubuntu-docker
+    executor: ubuntu-docker-amd64
     steps:
       - attach_workspace:
           at: .
@@ -411,6 +468,7 @@ workflows:
       - build-linux-aarch64
       - build-windows-amd64
       - build-macos-amd64
+      - build-macos-aarch64
 
       - test-unified:
           name: test-linux-amd64
@@ -439,11 +497,20 @@ workflows:
           name: test-macos-amd64
           requires:
             - build-macos-amd64
-          executor: macos
+          executor: macos-amd64
           extract-cmd: |
             brew uninstall --ignore-dependencies openssl
             unzip "${ARTEFACT_IDENTIFIER}.zip"
           artefact-identifier: iperf3-<< pipeline.parameters.build-name >>-macos-amd64
+      - test-unified:
+          name: test-macos-aarch64
+          requires:
+            - build-macos-aarch64
+          executor: macos-aarch64
+          extract-cmd: |
+            brew uninstall --ignore-dependencies openssl
+            unzip "${ARTEFACT_IDENTIFIER}.zip"
+          artefact-identifier: iperf3-<< pipeline.parameters.build-name >>-macos-aarch64
 
       - release:
           requires:
@@ -451,6 +518,7 @@ workflows:
             - test-linux-aarch64
             - test-windows-amd64
             - test-macos-amd64
+            - test-macos-aarch64
           context: github
           filters:
             branches:
