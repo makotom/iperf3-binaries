@@ -39,9 +39,9 @@ executors:
     docker:
       - image: ubuntu:rolling
     resource_class: arm.medium
-  archlinux-docker:
-    docker:
-      - image: archlinux
+  ubuntu-machine-amd64:
+    machine:
+      image: ubuntu-2204:current
     resource_class: medium
   ubuntu-machine-aarch64:
     machine:
@@ -129,63 +129,13 @@ jobs:
             SRC_REPO: << pipeline.parameters.src-repo >>
             CONTINUE_CONFIG: << parameters.continue-config >>
 
-  build-linux-amd64:
-    executor: ubuntu-docker-amd64
+  build-linux-unified:
     parameters:
+      executor:
+        type: string
       artefact-identifier:
         type: string
-        default: iperf3-<< pipeline.parameters.build-name >>-linux-amd64
-    environment:
-      ARTEFACT_IDENTIFIER: << parameters.artefact-identifier >>
-    steps:
-      - run:
-          name: Install dependencies
-          command: |
-            apt update
-            apt install -y git gcc make libssl-dev
-      - run:
-          name: Clone iperf3
-          command: |
-            mkdir -p iperf
-            cd iperf
-
-            git init
-            git remote add origin "${SRC_REPO}"
-            git fetch --depth 1 origin "${TARGET_COMMIT_HASH}"
-            git checkout "${TARGET_COMMIT_HASH}"
-          environment:
-            SRC_REPO: << pipeline.parameters.src-repo >>
-            TARGET_COMMIT_HASH: << pipeline.parameters.target-commit-hash >>
-      - run:
-          name: Build iperf3
-          working_directory: iperf
-          command: |
-            IPERF3_MAKE_PREFIX="$(eval echo "${CIRCLE_WORKING_DIRECTORY}")/${ARTEFACT_IDENTIFIER}"
-            mkdir -p "${IPERF3_MAKE_PREFIX}"
-
-            ./configure --prefix="${IPERF3_MAKE_PREFIX}" --disable-shared --disable-static --enable-static-bin
-            make
-            make install
-
-            mkdir -p "${IPERF3_MAKE_PREFIX}/share/doc/iperf3"
-            cp LICENSE "${IPERF3_MAKE_PREFIX}/share/doc/iperf3"
-      - run:
-          name: Create a tarball
-          command: tar -czf "$(eval echo "${CIRCLE_WORKING_DIRECTORY}")/${ARTEFACT_IDENTIFIER}.tar.gz" -- *
-          working_directory: << parameters.artefact-identifier >>
-      - persist_to_workspace:
-          root: .
-          paths:
-            - << parameters.artefact-identifier >>.tar.gz
-      - store_artifacts:
-          path: << parameters.artefact-identifier >>.tar.gz
-
-  build-linux-aarch64:
-    executor: ubuntu-docker-aarch64
-    parameters:
-      artefact-identifier:
-        type: string
-        default: iperf3-<< pipeline.parameters.build-name >>-linux-aarch64
+    executor: << parameters.executor >>
     environment:
       ARTEFACT_IDENTIFIER: << parameters.artefact-identifier >>
     steps:
@@ -246,9 +196,7 @@ jobs:
           command: curl -JOL https://cygwin.com/setup-x86_64.exe
       - run:
           name: Install Cygwin and required packages
-          command: |
-            .\setup-x86_64.exe -q -s https://mirrors.kernel.org/sourceware/cygwin/ -P libssl-devel,zlib,git,gcc-core,make
-            Start-Sleep 120
+          command: .\setup-x86_64.exe -q -s https://mirrors.kernel.org/sourceware/cygwin/ -P libssl-devel,zlib,git,gcc-core,make
       - run:
           name: Clone iperf3 with Cygwin
           shell: C:\\cygwin64\\bin\\bash.exe --login -eo pipefail
@@ -279,7 +227,7 @@ jobs:
             make install
 
             # Bundle dependencies
-            cp /usr/bin/cygwin1.dll /usr/bin/cygcrypto-1.1.dll /usr/bin/cygz.dll -t "${IPERF3_MAKE_PREFIX}/bin"
+            cp /usr/bin/cygwin1.dll /usr/bin/cygcrypto-3.dll /usr/bin/cygz.dll -t "${IPERF3_MAKE_PREFIX}/bin"
 
             # Copy licence terms
             mkdir -p "${IPERF3_MAKE_PREFIX}/share/doc/iperf3" "${IPERF3_MAKE_PREFIX}/share/doc/Cygwin"
@@ -464,8 +412,14 @@ workflows:
     when:
       not: << pipeline.parameters.is-setup >>
     jobs:
-      - build-linux-amd64
-      - build-linux-aarch64
+      - build-linux-unified:
+          name: build-linux-amd64
+          executor: ubuntu-docker-amd64
+          artefact-identifier: iperf3-<< pipeline.parameters.build-name >>-linux-amd64
+      - build-linux-unified:
+          name: build-linux-aarch64
+          executor: ubuntu-docker-aarch64
+          artefact-identifier: iperf3-<< pipeline.parameters.build-name >>-linux-aarch64
       - build-windows-amd64
       - build-macos-amd64
       - build-macos-aarch64
@@ -474,7 +428,7 @@ workflows:
           name: test-linux-amd64
           requires:
             - build-linux-amd64
-          executor: archlinux-docker
+          executor: ubuntu-machine-amd64
           extract-cmd: tar -xf "${ARTEFACT_IDENTIFIER}.tar.gz"
           artefact-identifier: iperf3-<< pipeline.parameters.build-name >>-linux-amd64
       - test-unified:
