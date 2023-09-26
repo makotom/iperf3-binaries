@@ -39,7 +39,6 @@ executors:
     docker:
       - image: ubuntu:rolling
     resource_class: arm.medium
-
   ubuntu-machine-amd64:
     machine:
       image: ubuntu-2204:current
