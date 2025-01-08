@@ -52,14 +52,10 @@ executors:
       image: windows-server-2022-gui:current
     shell: powershell.exe
     resource_class: windows.medium
-  macos-amd64:
-    macos:
-      xcode: 14.3.1
-    resource_class: macos.x86.medium.gen2
   macos-aarch64:
     macos:
-      xcode: 14.3.1
-    resource_class: macos.m1.medium.gen1
+      xcode: 16.2.0
+    resource_class: m2pro.medium
 
 jobs:
   setup:
@@ -249,56 +245,6 @@ jobs:
       - store_artifacts:
           path: << parameters.artefact-identifier >>.zip
 
-  build-macos-amd64:
-    executor: macos-amd64
-    parameters:
-      artefact-identifier:
-        type: string
-        default: iperf3-<< pipeline.parameters.build-name >>-macos-amd64
-    environment:
-      ARTEFACT_IDENTIFIER: << parameters.artefact-identifier >>
-    steps:
-      - run:
-          name: Clone iperf3
-          command: |
-            mkdir -p iperf
-            cd iperf
-
-            git init
-            git remote add origin "${SRC_REPO}"
-            git fetch --depth 1 origin "${TARGET_COMMIT_HASH}"
-            git checkout "${TARGET_COMMIT_HASH}"
-          environment:
-            SRC_REPO: << pipeline.parameters.src-repo >>
-            TARGET_COMMIT_HASH: << pipeline.parameters.target-commit-hash >>
-      - run:
-          name: Build iperf3
-          working_directory: iperf
-          command: |
-            find /usr/local -name libssl.3.dylib -exec rm -f {} \;
-            find /usr/local -name libcrypto.3.dylib -exec rm -f {} \;
-
-            IPERF3_MAKE_PREFIX="$(eval echo "${CIRCLE_WORKING_DIRECTORY}")/${ARTEFACT_IDENTIFIER}"
-            mkdir -p "${IPERF3_MAKE_PREFIX}"
-
-            ./configure --prefix="${IPERF3_MAKE_PREFIX}" --with-openssl="$(brew --prefix openssl)" --disable-shared --disable-static
-            make
-            make install
-
-            # Copy licence terms for iperf
-            mkdir -p "${IPERF3_MAKE_PREFIX}/share/doc/iperf3"
-            cp LICENSE "${IPERF3_MAKE_PREFIX}/share/doc/iperf3"
-      - run:
-          name: Create a Zip file
-          command: zip -r "$(eval echo "${CIRCLE_WORKING_DIRECTORY}")/${ARTEFACT_IDENTIFIER}.zip" -- *
-          working_directory: << parameters.artefact-identifier >>
-      - persist_to_workspace:
-          root: .
-          paths:
-            - << parameters.artefact-identifier >>.zip
-      - store_artifacts:
-          path: << parameters.artefact-identifier >>.zip
-
   build-macos-aarch64:
     executor: macos-aarch64
     parameters:
@@ -421,7 +367,6 @@ workflows:
           executor: ubuntu-docker-aarch64
           artefact-identifier: iperf3-<< pipeline.parameters.build-name >>-linux-aarch64
       - build-windows-amd64
-      - build-macos-amd64
       - build-macos-aarch64
 
       - test-unified:
@@ -448,15 +393,6 @@ workflows:
             Expand-Archive "${env:ARTEFACT_IDENTIFIER}.zip" .
           artefact-identifier: iperf3-<< pipeline.parameters.build-name >>-windows-amd64
       - test-unified:
-          name: test-macos-amd64
-          requires:
-            - build-macos-amd64
-          executor: macos-amd64
-          extract-cmd: |
-            brew uninstall --ignore-dependencies openssl
-            unzip "${ARTEFACT_IDENTIFIER}.zip"
-          artefact-identifier: iperf3-<< pipeline.parameters.build-name >>-macos-amd64
-      - test-unified:
           name: test-macos-aarch64
           requires:
             - build-macos-aarch64
@@ -471,7 +407,6 @@ workflows:
             - test-linux-amd64
             - test-linux-aarch64
             - test-windows-amd64
-            - test-macos-amd64
             - test-macos-aarch64
           context: github
           filters:
