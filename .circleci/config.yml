@@ -49,13 +49,13 @@ executors:
     resource_class: arm.medium
   windows:
     machine:
-      image: windows-server-2022-gui:current
+      image: windows-server-2025-gui:current
     shell: powershell.exe
     resource_class: windows.medium
   macos-aarch64:
     macos:
-      xcode: 16.2.0
-    resource_class: macos.m1.medium.gen1
+      xcode: 26.2.0
+    resource_class: m4pro.medium
 
 jobs:
   setup:
