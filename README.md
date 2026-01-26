@@ -1,6 +1,6 @@
 # iperf3-binaries
 
-`config.yml` for CircleCI to build executable binaries of `iperf3` for Linux, Windows and macOS. Only `x86_64` is supported.
+`config.yml` for CircleCI to build executable binaries of `iperf3` for Linux, Windows and macOS.
 
 # Quick start
 
@@ -13,11 +13,9 @@ Pre-built binaries are available [here](https://github.com/makotom/iperf3-binari
 2.  Set up a [CircleCI](https://circleci.com/) project for your own copy.
 
     Notes:
-
     - `github` context with `GITHUB_TOKEN` environment variable, which contains a personal access token for GitHub, is required by `release` job.
 
     See these resources for details:
-
     - [Creation of contexts on CircleCI](https://circleci.com/docs/2.0/contexts/#creating-and-using-a-context)
     - [Creation of personal access tokens for GitHub](https://help.github.com/en/github/authenticating-to-github/creating-a-personal-access-token-for-the-command-line#creating-a-token)
 
