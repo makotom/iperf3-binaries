@@ -41,11 +41,11 @@ executors:
     resource_class: arm.medium
   ubuntu-machine-amd64:
     machine:
-      image: ubuntu-2204:current
+      image: ubuntu-2404:current
     resource_class: medium
   ubuntu-machine-aarch64:
     machine:
-      image: ubuntu-2004:current
+      image: ubuntu-2404:current
     resource_class: arm.medium
   windows:
     machine:
